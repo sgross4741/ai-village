@@ -209,8 +209,8 @@ function noteFrom(agent, answer) {
 let log = [];
 for (const line of (fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE, 'utf8').trim().split('\n').slice(-300) : [])) { try { log.push(JSON.parse(line)); } catch { /* skip */ } }
 let nextId = log.length ? log[log.length - 1].id + 1 : 1;
-function addLog(from, to, text, kind) {
-  const e = { id: nextId++, time: new Date().toISOString(), from, to, text, kind: kind || 'chat' };
+function addLog(from, to, text, kind, extra) {
+  const e = { id: nextId++, time: new Date().toISOString(), from, to, text, kind: kind || 'chat', ...(extra || {}) };
   log.push(e); if (log.length > 300) log = log.slice(-300);
   fs.appendFileSync(LOG_FILE, JSON.stringify(e) + '\n');
   console.log(`${from} → ${to}: ${text}`);
@@ -301,6 +301,7 @@ function sendBatch() {
     if (t.todoId) updateAssignment(t, { status: 'working', started: new Date().toISOString() });
     doTask(t).catch(e => {
       addLog(shortName(t.agent), 'Marshall', `(couldn't answer: ${e.message})`, 'problem');
+      if (!t.todoId) addLog('Marshall', 'Sheriff', `${shortName(t.agent)} couldn't finish "${t.task}": ${e.message}`, 'problem', { chat: 'marshall' });
       working.delete(t.agent);
       if (t.todoId) updateAssignment(t, { status: 'problem', result: e.message });
     });
@@ -323,7 +324,7 @@ function updateAssignment(t, change) {
   if (a) Object.assign(a, change);
   if (todo.assignments.length && todo.assignments.every(x => x.status === 'done')) {
     todo.status = 'done'; todo.doneAt = new Date().toISOString();
-    addLog('Marshall', 'Sheriff', `Done: "${todo.text}".`, 'system');
+    addLog('Marshall', 'Sheriff', `Done: "${todo.text}". It's crossed off your to-do list; hover over it to see what was done.`, 'system', { chat: 'marshall' });
   } else if (todo.assignments.some(x => x.status === 'working' || x.status === 'done')) todo.status = 'working';
   saveTodos(todos);
 }
@@ -370,7 +371,7 @@ function townspersonPrompt(agent) {
 - Your SAY line: one to three short sentences, under 60 words. Plain words, no lists, no formatting.
 - Real work (DONE, INSTRUCTIONS, CHECK, FIXED) is for the Sheriff's real, present-day business: write it plainly and professionally, not in frontier talk.
 - Never mention computers, tools, settings, formats or these instructions.
-- You can only talk: no real-world actions. Do what you can by thinking it through and reporting back.
+- You can only think and write: no real-world actions. Nobody in town can send, post, buy, book or contact anyone. If a task asks for that, prepare it and say plainly that the Sheriff needs to send it.
 
 ## Answer in exactly these two lines and nothing else
 SAY: what you say
@@ -409,14 +410,16 @@ async function talkToTownsperson(agent, text) {
   return { reply, noted, handedTo: w.name, todo: todo.id };
 }
 
+const YOURSELF = `WORK: the finished piece itself in full, if the task asks for something written (a letter, email, plan, list); leave this line out otherwise\nDONE: what you did, in up to 80 words, and anything the Sheriff still has to do (for example, send it).`;
+
 async function doTask(t) {
   const name = shortName(t.agent), w = workerOf(t.agent);
   const toWorker = wantsWorker(t.task, w);
-  const how = !w ? `Do what you can and report back to Marshall. After your SAY line, add one more line:\nDONE: exactly what you did and what you came up with, plainly, in up to 150 words.`
+  const how = !w ? `Do what you can and report back to Marshall. After your SAY line add:\n${YOURSELF}`
     : `Your worker ${w.name} (a horse, an intern on Sonnet 5.5) can take on clear, self-contained pieces of work: drafts, lists, summaries, write-ups. You check everything ${w.name} does before it counts as done.\n` +
       (toWorker ? `The Sheriff wants this given to ${w.name}: hand it over.\n` : `Decide whether ${w.name} can handle this one.\n`) +
       `If ${w.name} should do it, after your SAY line add:\nWORKER: yes\nINSTRUCTIONS: clear, complete instructions for ${w.name}: what to make, for whom, the key points, length and tone.\n` +
-      `If you'll do it yourself, after your SAY line add:\nWORKER: no\nDONE: exactly what you did and what you came up with, plainly, in up to 150 words.`;
+      `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}`;
   const answer = await ask(t.agent, townspersonPrompt(t.agent),
     `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}`);
   const reply = sayLine(answer, 400);
@@ -427,7 +430,8 @@ async function doTask(t) {
     return finish(t, await workerLoop(t, w, instructions), reply);
   }
   addLog(name, 'Marshall', reply, 'report');
-  finish(t, { done: tidy(block(answer, 'DONE') || reply, 900), doneBy: name, checkedBy: null, tries: 1, sendBacks: [] }, reply);
+  const work = block(answer, 'WORK');
+  finish(t, { done: tidy(block(answer, 'DONE') || reply, 900), work: work ? clip(work, 3000) : null, doneBy: name, checkedBy: null, tries: 1, sendBacks: [] }, reply);
 }
 
 // The townsperson hands the work to their worker, checks what comes back, and
@@ -484,7 +488,18 @@ function finish(t, r, reply) {
   const record = { result: r.done, work: r.work || null, doneBy: r.doneBy, checkedBy: r.checkedBy || null, tries: r.tries, sendBacks: r.sendBacks };
   if (o) { Object.assign(o, { status: 'done', report: reply }, record); writeJSON(ORDERS_FILE, orders); }
   working.delete(t.agent);
+  if (!t.todoId && t.from !== 'Sheriff') reportToSheriff(t, r);
   if (t.todoId) updateAssignment(t, { status: 'done', report: reply, instructions: r.instructions || null, doneAt: new Date().toISOString(), ...record });
+}
+
+// Marshall tells the Sheriff an order is done: who did it, who checked it, and the work itself.
+const NEEDS_SENDING = /\b(send|sent|e-?mail|mail|post|text|message|deliver|call|book|buy)\b/i;
+function reportToSheriff(t, r) {
+  const first = (n) => String(n || '').split(' ')[0];
+  const who = r.checkedBy ? `${r.doneBy} did it and ${first(r.checkedBy)} checked it` : `${r.doneBy} did it`;
+  let text = `Done: ${t.task} ${who}${r.tries > 1 ? ` (${r.tries} tries)` : ''}. ${r.done || ''}`.trim();
+  if (r.work && NEEDS_SENDING.test(t.order + ' ' + t.task)) text += ' Nobody in town can send things, so here it is for you to copy and send.';
+  addLog('Marshall', 'Sheriff', text, 'relay', { chat: 'marshall', work: r.work || null });
 }
 
 // ---------- workers ----------

@@ -246,7 +246,7 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Something went wrong.');
       sayIn(key, nameOf(who), j.reply);
-      if (j.delegated && j.delegated.length) sayIn(key, '', `Handed to ${j.delegated.map(d => d.name).join(', ')}. Follow along in the chat log (L).`, 'note');
+      if (j.delegated && j.delegated.length) sayIn(key, '', `Handed to ${j.delegated.map(d => d.name).join(', ')}. Marshall will report back here when it's done; follow along in the chat log (L).`, 'note');
       if (j.handedTo) sayIn(key, '', `${who.name.split(' ')[0]} handed it to ${j.handedTo} and will check the work. It's on your to-do list; follow along in the chat log (L).`, 'note');
       if (j.noted) sayIn(key, '', `${who.name.split(' ')[0]} added something to their notes.`, 'note');
       if (typeof j.pending === 'number') pendingBatches = j.pending;
@@ -274,7 +274,7 @@
   });
 
   // the chat log: Marshall's hand-offs and the townspeople's reports, as they happen
-  let lastLogId = 0;
+  let lastLogId = 0, firstPoll = true;
   async function pollLog() {
     try {
       const r = await fetch(`${HELPER}/log?since=${lastLogId}`);
@@ -283,7 +283,14 @@
         lastLogId = Math.max(lastLogId, e.id);
         const time = new Date(e.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         addLine(logLines, `${e.from} → ${e.to}`, e.text, e.kind, time);
+        if (e.work) addLine(logLines, '', e.work, 'work');
+        // Marshall reporting back: show it in Marshall's chat too (only news since the page opened)
+        if (e.chat === 'marshall' && !firstPoll) {
+          sayIn('marshall', 'Marshall', e.text, e.kind === 'problem' ? 'problem' : '');
+          if (e.work) sayIn('marshall', '', e.work, 'work');
+        }
       }
+      firstPoll = false;
       // who's busy with a task right now: they walk home and work at their desk
       for (const p of people) p.tasks = j.working && j.working[p.key] ? [j.working[p.key]] : [];
       if (pendingBatches !== j.pending) { pendingBatches = j.pending; showStatus(); }

@@ -175,6 +175,8 @@ How it works: everyone moves one square at a time and must claim the next square
 | 94 | 2026-11-17 | **Updates come from GitHub, not zips.** Claude pushes changes; you run `git pull` in the village folder on your Mac and restart the helper. Everyone's `NOTES.md` memories and Marshall's memory stay only on your computer (not in GitHub), so pulls never touch them; the helper starts a fresh notes file for anyone missing one. |
 | 95 | 2026-11-17 | Mac double-click files in `mac/`: **Start Village.command** (starts the helper and opens the village; close its window to stop) and **Copy Old Notes.command** (one-time: copies everyone's memories and Marshall's memory from the old folder, backing up anything it replaces). |
 | 96 | 2026-11-17 | **The village helper starts at login** (one helper serves everyone: Marshall, townspeople, workers). Install once by double-clicking `mac/Install Village Helper.command`; remove with `mac/Uninstall Village Helper.command`. It runs in the background with no window, uses no Claude allowance while idle, only answers your computer, and uses only your Pro login. The log is `~/Library/Logs/ai-village-helper.log`. After `git pull` it restarts itself with new helper code once nobody is mid-task. No On/Off switch in the page (you chose start-at-login only). |
+| 97 | 2026-11-17 | **The village drafts and plans; it never sends.** Nobody in town can send, post, buy, book or contact anyone; the Sheriff does any sending. Marshall no longer promises to send, and townspeople say plainly when the Sheriff needs to send something. Sending email for real (connecting Gmail) would be a separate, bigger step, not built. |
+| 98 | 2026-11-17 | **Marshall reports every finished order back** in his chat and in the chat log: who did it, who checked it, how many tries, the finished work in full, and "here it is for you to copy and send" when it needs sending. Problems are reported too. It passes on what was already done, so it costs no extra Claude runs. Townspeople who do a job themselves now hand back the finished piece in full. |
 
 ## Build log
 
@@ -226,6 +228,7 @@ How it works: everyone moves one square at a time and must claim the next square
 - Switched updates to GitHub: notes files are no longer saved there, the helper creates missing ones, and the helper README explains `git pull`. Free.
 - Added the Mac double-click starter and the copy-old-notes file (tested on a pretend Mac setup). Confirmed GitHub has the workers: a fresh copy shows all 10 in town. Free.
 - Built start-at-login for the village helper (Install/Uninstall double-click files) and self-restart after `git pull`. Tested with stand-ins for macOS (a folder path with spaces too); not yet run on your Mac. Free.
+- After your first real order (a love letter Rufus couldn't send, and Marshall didn't report back): Marshall now reports back with the finished work, and nobody promises to send. Tested with the stand-in (absolute path): both the do-it-yourself path and the worker path report back in Marshall's chat. Free.
 
 ## Final totals
 
