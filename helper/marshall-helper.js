@@ -39,6 +39,9 @@ const GMAIL_DRAFTERS = new Set(['rufus']);
 const GMAIL_SERVER = process.env.GMAIL_MCP_SERVER || 'claude_ai_Gmail';    // "claude.ai Gmail" in Claude Code's /mcp
 const DRAFT_TOOL = `mcp__${GMAIL_SERVER}__create_draft`;
 const BLOCKED_TOOLS = ['Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'Agent',
+  'TodoWrite', 'Skill', 'SlashCommand', 'BashOutput', 'KillShell', 'CronCreate', 'CronDelete', 'ScheduleWakeup', 'PushNotification',
+  'SendMessage', 'SendUserFile', 'Artifact', 'Workflow', 'ToolSearch', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree',
+  'mcp__claude_ai_Higgsfield', 'mcp__claude_ai_Claude_Docs',
   ...['send_message', 'reply', 'forward', 'update_draft', 'delete_draft', 'list_drafts', 'get_draft', 'get_thread', 'get_message',
     'search_threads', 'list_labels', 'label_thread', 'unlabel_thread', 'label_message', 'unlabel_message', 'update_message_labels',
     'apply_sensitive_thread_label', 'apply_sensitive_message_label', 'trash_thread', 'trash_message', 'untrash_thread', 'untrash_message',
@@ -110,17 +113,21 @@ function pickWorker(townsperson, text) {
 const shortName = (key) => { const p = townspeople().find(t => t.key === key) || workerInfo(key); return p ? p.name : key; };
 
 // ---------- running Claude Code (your subscription, no tools) ----------
-function subscriptionEnv() {
+// Only your Claude subscription login: remove every way Claude Code could bill
+// somewhere else (API keys, other providers, another server address).
+function subscriptionEnv(withConnectors) {
   const env = { ...process.env };
-  delete env.ANTHROPIC_API_KEY;
-  delete env.ANTHROPIC_AUTH_TOKEN;
+  for (const k of Object.keys(env)) {
+    if (/^ANTHROPIC_/.test(k) || /^CLAUDE_CODE_USE_/.test(k) || /^AWS_BEARER_TOKEN_BEDROCK$/.test(k)) delete env[k];
+  }
+  if (!withConnectors) env.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';   // no claude.ai connectors (Gmail, Higgsfield...) at all
   return env;
 }
-function runClaude(args) {
+function runClaude(args, withConnectors) {
   return new Promise((resolve) => {
     let out = '', err = '', done = false, child;
     try {
-      child = spawn(CLAUDE, args, { cwd: ROOM, env: subscriptionEnv(), shell: false, windowsHide: true });
+      child = spawn(CLAUDE, args, { cwd: ROOM, env: subscriptionEnv(withConnectors), shell: false, windowsHide: true });
     } catch (e) {
       return resolve({ code: -1, out: '', err: String(e && e.message || e), spawnError: true });
     }
@@ -147,6 +154,55 @@ let noAdvisor = false;          // set if this Claude Code doesn't support the a
 let systemPromptFlag = 'replace';
 
 // One message to one agent. Returns the plain text they answered.
+// ---------- the lockdown on every Claude Code run ----------
+// - No built-in tools at all (--tools ""): no files, commands, web, scheduling or sub-agents.
+// - None of your own Claude Code settings, plugins, hooks or skills (--setting-sources project,
+//   in an empty folder), so nothing you allowed for yourself carries over to the village.
+// - No connectors (MCP servers) except for Rufus saving a Gmail draft, which gets only the
+//   create-draft tool.
+// - The tool gate (tool-gate.js) checks every tool call and blocks anything not allowed.
+const GATE = path.join(HERE, 'tool-gate.js');
+const ATTEMPTS_FILE = path.join(HOME, 'tool-attempts.jsonl');
+const shellQuote = (t) => `'${String(t).replace(/'/g, `'\\''`)}'`;
+function lockdown(agent, tools) {
+  const allowed = tools || [];
+  const gate = [process.execPath, GATE, agent, ATTEMPTS_FILE, ...allowed].map(shellQuote).join(' ');
+  const settings = { hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: gate }] }] } };
+  return ['--tools', '', '--setting-sources', 'project', '--disable-slash-commands', '--settings', JSON.stringify(settings),
+    ...(allowed.length ? ['--allowedTools', allowed.join(','), '--disallowedTools', BLOCKED_TOOLS.join(',')]
+                       : ['--strict-mcp-config', '--disallowedTools', BLOCKED_TOOLS.join(',')])];
+}
+// tell the Sheriff if an agent tried to use something it isn't allowed to (the gate blocked it)
+let attemptsSeen = fs.existsSync(ATTEMPTS_FILE) ? fs.statSync(ATTEMPTS_FILE).size : 0;
+function checkToolAttempts() {
+  if (!fs.existsSync(ATTEMPTS_FILE)) return;
+  const size = fs.statSync(ATTEMPTS_FILE).size;
+  if (size <= attemptsSeen) return;
+  const fd = fs.openSync(ATTEMPTS_FILE, 'r'), buf = Buffer.alloc(size - attemptsSeen);
+  fs.readSync(fd, buf, 0, buf.length, attemptsSeen); fs.closeSync(fd);
+  attemptsSeen = size;
+  for (const line of buf.toString('utf8').split('\n')) {
+    let a; try { a = JSON.parse(line); } catch { continue; }
+    if (a.allowed) continue;
+    const who = a.who === 'marshall' ? 'Marshall' : shortName(a.who);
+    addLog('Village safety', 'Sheriff', `${who} tried to use ${a.tool} and was blocked.`, 'problem');
+    addNotice('problem', `${who} tried to use a tool they aren't allowed (${a.tool}). It was blocked; nothing happened.`, { log: true });
+  }
+}
+// a daily safety limit on Claude runs, so nothing can run away with your allowance
+const DAILY_RUN_LIMIT = Number(process.env.VILLAGE_DAILY_RUN_LIMIT) || 300;
+const RUNS_TODAY_FILE = path.join(HOME, 'runs-today.json');
+function underDailyLimit() {
+  const r = readJSON(RUNS_TODAY_FILE, {});
+  return r.date !== today() || (r.count || 0) < DAILY_RUN_LIMIT;
+}
+function countRun() {
+  const r = readJSON(RUNS_TODAY_FILE, {});
+  const next = r.date === today() ? { date: r.date, count: (r.count || 0) + 1 } : { date: today(), count: 1 };
+  writeJSON(RUNS_TODAY_FILE, next);
+  if (next.count === DAILY_RUN_LIMIT) addNotice('problem', `The village reached today's safety limit of ${DAILY_RUN_LIMIT} Claude runs. Everyone rests until tomorrow.`, { log: true });
+}
+
 // opts.allowTools: the only tools this run may use (default: none at all). Such runs start a
 // fresh conversation each time. opts.result receives Claude Code's full answer.
 async function ask(agent, systemPrompt, message, opts = {}) {
@@ -162,7 +218,7 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     fs.writeFileSync(promptFile, systemPrompt);
     const build = () => {
       const args = ['-p', message, '--model', opts.model || (isWorker ? WORKER_MODEL : MODEL), '--output-format', 'json',
-        ...(tools ? ['--allowedTools', tools.join(','), '--disallowedTools', BLOCKED_TOOLS.join(',')] : ['--disallowedTools', '*']),
+        ...lockdown(agent, tools),
         '--permission-mode', 'dontAsk', '--max-turns', tools ? '4' : '2'];
       args.push(...(systemPromptFlag === 'append' ? ['--append-system-prompt-file', promptFile] : ['--system-prompt', systemPrompt]));
       if (agent !== 'marshall' && !isWorker && !opts.model && !noAdvisor && ADVISOR !== 'none') args.push('--advisor', ADVISOR);
@@ -170,16 +226,22 @@ async function ask(agent, systemPrompt, message, opts = {}) {
       return args;
     };
     const started = Date.now();
-    let run = await runClaude(build());
+    if (!underDailyLimit()) throw new Error(`The village has used its ${DAILY_RUN_LIMIT} Claude runs for today (a safety limit). Everyone rests until tomorrow.`);
+    let run = await runClaude(build(), !!tools);
+    if (run.code !== 0 && /unknown option|unknown argument/i.test(run.out + run.err)) {
+      throw new Error(`Your Claude Code is too old for the village's safety settings, so nothing ran. Update it (run: claude update), then try again. (${(run.err || run.out).trim().slice(0, 160)})`);
+    }
     const said = run.out + run.err;
     if (run.code !== 0 && /advisor/i.test(said) && !noAdvisor) {
       noAdvisor = true;
       console.log('  note: this Claude Code does not take the advisor option here; townspeople will run without it.');
-      run = await runClaude(build());
+      run = await runClaude(build(), !!tools);
     }
-    if (run.code !== 0 && /system-prompt/i.test(run.out + run.err) && systemPromptFlag !== 'append') { systemPromptFlag = 'append'; run = await runClaude(build()); }
-    if (s.sessionId && run.code !== 0 && /session|resume/i.test(run.out + run.err)) { delete s.sessionId; run = await runClaude(build()); }
+    if (run.code !== 0 && /system-prompt/i.test(run.out + run.err) && systemPromptFlag !== 'append') { systemPromptFlag = 'append'; run = await runClaude(build(), !!tools); }
+    if (s.sessionId && run.code !== 0 && /session|resume/i.test(run.out + run.err)) { delete s.sessionId; run = await runClaude(build(), !!tools); }
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
+    countRun();
+    checkToolAttempts();
 
     if (run.spawnError) throw new Error(`Couldn't start Claude Code ("${CLAUDE}"). Is it installed and on your PATH? (${run.err})`);
     let obj;
@@ -779,9 +841,13 @@ ${notes}`;
 }
 
 // ---------- tiny web server, this computer only ----------
-function allowedOrigin(origin) {
-  return !origin || origin === 'null' || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-}
+// Only the village page, served by this helper at http://127.0.0.1:PORT, may talk to it.
+// Not file:// pages, not other local servers, not websites (a website can't fake this).
+const PAGE_ORIGINS = [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];
+const PAGE_HOSTS = [`127.0.0.1:${PORT}`, `localhost:${PORT}`];
+// the village page's own files (nothing else on your computer is ever served)
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html',
+  ...Object.fromEntries(['art', 'characters', 'town', 'interiors', 'townsfolk', 'main'].map(n => [`/game/${n}.js`, `game/${n}.js`])) };
 function readBody(req, max) {
   return new Promise((resolve) => {
     let body = '';
@@ -793,17 +859,21 @@ const busyAgents = new Set();   // one conversation at a time per person
 
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
-  if (!allowedOrigin(origin)) { res.writeHead(403); return res.end('Only the village page may talk to the village.'); }
-  const headers = {
-    'Access-Control-Allow-Origin': origin || 'null',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Private-Network': 'true',
-    'Content-Type': 'application/json',
-  };
+  const refuse = (why) => { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end(why); };
+  // the address typed in the browser must be this computer (stops "DNS rebinding" tricks)
+  if (!PAGE_HOSTS.includes(String(req.headers.host || ''))) return refuse('Open the village at http://127.0.0.1:' + PORT);
+  // anything that changes something must come from the village page itself
+  if (req.method !== 'GET' && !PAGE_ORIGINS.includes(origin)) return refuse('Only the village page may talk to the village.');
+  if (origin && !PAGE_ORIGINS.includes(origin)) return refuse('Only the village page may talk to the village.');
+  const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
   const send = (code, body) => { res.writeHead(code, headers); res.end(JSON.stringify(body)); };
-  if (req.method === 'OPTIONS') { res.writeHead(204, headers); return res.end(); }
   const url = new URL(req.url, 'http://127.0.0.1');
+  if (req.method === 'GET' && PAGE_FILES[url.pathname]) {
+    const file = path.join(HERE, '..', PAGE_FILES[url.pathname]);
+    res.writeHead(200, { 'Content-Type': file.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" });
+    return res.end(fs.readFileSync(file));
+  }
 
   if (req.method === 'GET' && url.pathname === '/hello') return send(200, { ok: true, name: 'Village helper', model: MODEL, advisor: noAdvisor ? 'none' : ADVISOR });
   if (req.method === 'GET' && url.pathname === '/log') {
@@ -909,7 +979,70 @@ async function check() {
 }
 
 ensureNotes();
-if (process.argv.includes('--check')) {
+// --check-safety: show exactly what a village run can reach, WITHOUT contacting Claude
+// (Claude Code is pointed at an address that goes nowhere, so it lists its tools and stops).
+// Uses none of your Claude allowance.
+function probe(agent, tools) {
+  return new Promise((resolve) => {
+    const args = ['-p', 'safety check', '--model', MODEL, '--output-format', 'stream-json', '--verbose', '--max-turns', '1',
+      ...lockdown(agent, tools), '--permission-mode', 'dontAsk'];
+    const env = { ...subscriptionEnv(!!tools), ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' };
+    let out = '', done = false, child;
+    try { child = spawn(CLAUDE, args, { cwd: ROOM, env, shell: false, windowsHide: true }); } catch (e) { return resolve({ error: String(e.message || e) }); }
+    const finish = (r) => { if (done) return; done = true; try { child.kill('SIGKILL'); } catch { /* */ } resolve(r); };
+    const timer = setTimeout(() => finish({ error: 'no answer within 60 seconds' }), 60000);
+    child.stdout.on('data', (d) => {
+      out += d;
+      for (const line of out.split('\n')) {
+        let j; try { j = JSON.parse(line); } catch { continue; }
+        if (j.type === 'system' && j.subtype === 'init') { clearTimeout(timer); finish({ tools: j.tools || [], mcp: (j.mcp_servers || []).map(m => m.name), mode: j.permissionMode }); }
+      }
+    });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('error', (e) => finish({ error: String(e.message || e) }));
+    child.on('close', () => { clearTimeout(timer); finish({ error: (out.trim().split('\n').pop() || 'Claude Code stopped').slice(0, 200) }); });
+    child.stdin.end();
+  });
+}
+async function checkSafety() {
+  let problems = 0;
+  const say = (ok, text) => { if (!ok) problems++; console.log(`${ok ? '  OK ' : '  !! '} ${text}`); };
+  console.log('Village safety check (nothing is sent to Claude; no allowance used)\n');
+  const plain = await probe('marshall', null);
+  console.log('Ordinary runs (Marshall, townspeople, workers, candidates):');
+  if (plain.error) say(false, `couldn't check: ${plain.error}`);
+  else {
+    say(plain.tools.length === 0, `tools they can use: ${plain.tools.length ? plain.tools.join(', ') : 'none'}`);
+    say(plain.mcp.length === 0, `connections (connectors/MCP): ${plain.mcp.length ? plain.mcp.join(', ') : 'none'}`);
+  }
+  const gmail = await probe('rufus', [DRAFT_TOOL]);
+  console.log('\nRufus saving a Gmail draft (only after you press the button):');
+  if (gmail.error) say(false, `couldn't check: ${gmail.error}`);
+  else {
+    say(gmail.tools.filter(t => !t.startsWith('mcp__')).length === 0, `built-in tools: ${gmail.tools.filter(t => !t.startsWith('mcp__')).join(', ') || 'none'}`);
+    console.log(`       connections loaded: ${gmail.mcp.join(', ') || 'none (connectors load only on real runs)'}`);
+    console.log(`       allowed: ${DRAFT_TOOL} only; every other tool is blocked by the tool gate`);
+  }
+  // the gate itself: allows only what it's told to
+  const gateSays = (tool, allowed) => new Promise((resolve) => {
+    const c = spawn(process.execPath, [GATE, 'safety-check', path.join(HOME, 'gate-selftest.jsonl'), ...allowed], { stdio: ['pipe', 'ignore', 'ignore'] });
+    c.on('close', (code) => resolve(code)); c.stdin.end(JSON.stringify({ tool_name: tool }));
+  });
+  console.log('\nThe tool gate:');
+  say(await gateSays('Bash', []) === 2, 'blocks commands (Bash)');
+  say(await gateSays(`mcp__${GMAIL_SERVER}__send_message`, [DRAFT_TOOL]) === 2, 'blocks sending email, even on a Gmail draft run');
+  say(await gateSays(DRAFT_TOOL, [DRAFT_TOOL]) === 0, 'lets Rufus create a draft, only when allowed');
+  try { fs.unlinkSync(path.join(HOME, 'gate-selftest.jsonl')); } catch { /* */ }
+  console.log('\nOther checks:');
+  say(!Object.keys(subscriptionEnv(false)).some(k => /^ANTHROPIC_|^CLAUDE_CODE_USE_/.test(k)), 'no API key or other billing route reaches Claude Code');
+  say(DAILY_RUN_LIMIT > 0, `daily safety limit: ${DAILY_RUN_LIMIT} Claude runs`);
+  console.log(problems ? `\n${problems} problem(s) found. Tell Claude what this printed.` : '\nAll good: no agent can send, post, spend or touch your files.');
+  process.exitCode = problems ? 1 : 0;
+}
+
+if (process.argv.includes('--check-safety')) {
+  checkSafety();
+} else if (process.argv.includes('--check')) {
   check();
 } else {
   server.on('error', (e) => {
@@ -918,7 +1051,7 @@ if (process.argv.includes('--check')) {
   });
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`${new Date().toISOString()} The village helper is running on this computer (127.0.0.1:${PORT}), using ${MODEL} through your Claude subscription.`);
-    console.log('Open index.html. Press M to talk to Marshall, or walk up to anyone and press T. Press Ctrl+C here to stop.');
+    console.log(`Open the village at http://127.0.0.1:${PORT} . Press M to talk to Marshall, or walk up to anyone and press T. Press Ctrl+C here to stop.`);
   });
   // Started at login (mac/Install Village Helper.command)? Then after a `git pull` brings
   // new helper code, restart to use it: wait until nobody is mid-task, then exit, and

@@ -64,7 +64,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
   if curl -s -m 1 http://127.0.0.1:7777/hello >/dev/null 2>&1; then
     echo "Done. The village helper is running, and it will start by itself every time you log in."
-    echo "To play, just open index.html (or double-click Start Village.command)."
+    echo "To play, open http://127.0.0.1:7777 in your browser (bookmark it), or double-click Start Village.command."
     echo "What everyone is doing is written to: $LOG"
     echo "Your Mac may show a notice that a background item (node) was added. That's this helper."
     finish 0

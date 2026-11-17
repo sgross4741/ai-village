@@ -8,7 +8,7 @@ export PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/b
 
 if curl -s -m 1 http://127.0.0.1:7777/hello >/dev/null 2>&1; then
   echo "The village helper is already running. Opening the village…"
-  open index.html
+  open "http://127.0.0.1:7777"
   exit 0
 fi
 if ! command -v node >/dev/null 2>&1; then
@@ -16,5 +16,5 @@ if ! command -v node >/dev/null 2>&1; then
   read -r -p "Press Return to close."
   exit 1
 fi
-(sleep 2; open index.html) &
+(sleep 2; open "http://127.0.0.1:7777") &
 node helper/marshall-helper.js

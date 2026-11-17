@@ -145,7 +145,10 @@
   // M: talk to Marshall from anywhere. L: the chat log. Esc / ×: close.
   // The page talks only to the village helper on this same computer, which uses
   // Claude Code with your subscription (see helper/README.md).
-  const HELPER = 'http://127.0.0.1:7777';
+  // The page talks to the helper only when the helper itself serves it (http://127.0.0.1:7777).
+  // Opened straight from the file, the helper refuses it: a website could pretend to be a file.
+  const HELPER = location.protocol === 'http:' ? location.origin : 'http://127.0.0.1:7777';
+  const OPENED_AS_FILE = location.protocol === 'file:';
   const $ = (id) => document.getElementById(id);
   const chatEl = $('chat'), chatTitle = $('chat-title'), chatLines = $('chat-lines'), chatForm = $('chat-form');
   const chatInput = $('chat-input'), chatStatus = $('chat-status'), nextBatchBtn = $('next-batch');
@@ -244,7 +247,7 @@
       brainEl.classList.add('on');
       return true;
     } catch {
-      brainEl.textContent = 'Village brains: not running (see helper/README.md)';
+      brainEl.textContent = OPENED_AS_FILE ? 'Village brains: open the village at http://127.0.0.1:7777' : 'Village brains: not running (see helper/README.md)';
       brainEl.classList.remove('on');
       return false;
     }

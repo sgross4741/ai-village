@@ -33,7 +33,7 @@ If you installed the login helper, it restarts itself with the new code. Otherwi
 
 ## Every time you play
 
-On a Mac, the easiest way: double-click **`mac/Install Village Helper.command`** once. From then on the helper starts by itself, quietly in the background, every time you log in, and you just open `index.html` to play. It uses no Claude allowance while idle. What everyone is doing is written to `~/Library/Logs/ai-village-helper.log`. After a `git pull`, it restarts itself to use new helper code as soon as nobody is in the middle of a task. If you move or rename the village folder, double-click the Install file again. To remove it, double-click **`mac/Uninstall Village Helper.command`**.
+On a Mac, the easiest way: double-click **`mac/Install Village Helper.command`** once. From then on the helper starts by itself, quietly in the background, every time you log in, and you open **http://127.0.0.1:7777** in your browser to play (bookmark it). It uses no Claude allowance while idle. What everyone is doing is written to `~/Library/Logs/ai-village-helper.log`. After a `git pull`, it restarts itself to use new helper code as soon as nobody is in the middle of a task. If you move or rename the village folder, double-click the Install file again. To remove it, double-click **`mac/Uninstall Village Helper.command`**.
 
 Or, without the login helper: double-click **`mac/Start Village.command`**. It starts the helper and opens the village. Keep its Terminal window open while you play; close it to stop. (Moving from an older village folder? Double-click **`mac/Copy Old Notes.command`** once to bring everyone's memories across.)
 
@@ -45,7 +45,7 @@ Or by hand:
 node helper/marshall-helper.js
 ```
 
-2. Double-click `index.html`. The top-right corner should say **Village brains: connected**.
+2. Open **http://127.0.0.1:7777** in your browser (bookmark it). The top-right corner should say **Village brains: connected**. Opening `index.html` straight from the folder still shows the town, but the brains won't connect: see Safety.
 3. Press **M** (or the **Deputy** button) from anywhere to talk to Marshall and give orders. Marshall hands each order to the right townspeople, at most 3 at a time. If an order needs more, Marshall says so and a **Send next batch** button appears.
 4. Press **L** (or **Chat Log**) to see the hand-offs and reports on the left as they happen. Townspeople with a task walk home and work at their desk until they report back.
 5. Walk up to any townsperson and press **T** to chat with them on the right. They answer in their own personality and know their job and notes.
@@ -108,6 +108,23 @@ $env:MARSHALL_CLAUDE_BIN="C:\full\path\to\claude.exe"; node helper/marshall-help
 - **Port 7777 is busy**: the helper is probably already running in another terminal.
 
 ## Safety
+
+**Nobody in the village can send, post, buy, book or spend anything, or touch your files.** To check this yourself on your computer (it doesn't contact Claude and uses none of your allowance):
+
+```bash
+node helper/marshall-helper.js --check-safety
+```
+
+How it's locked down:
+
+- **No tools.** Every Claude Code run starts with no built-in tools at all (no files, commands, web, scheduling or helpers), none of your own Claude Code settings, plugins, hooks or skills, and no connectors (Gmail, Higgsfield and so on).
+- **One exception, with your yes:** when you press "Save to Gmail drafts", Rufus's run gets the Gmail connector's create-draft tool and nothing else. Sending, replying, forwarding, deleting and reading mail stay blocked.
+- **The tool gate** (`helper/tool-gate.js`) checks every tool call on every run and blocks anything not allowed, whatever any other setting says. If an agent ever tries, you get a notice.
+- **Only your subscription.** The helper removes API keys and any other billing route before starting Claude Code. Keep usage credits / extra usage turned off on your Claude account so a limit just means waiting.
+- **A daily limit** of 300 Claude runs, so nothing can run away with your allowance. (Change it with the `VILLAGE_DAILY_RUN_LIMIT` setting.)
+- **Only the village page can talk to the helper**, and only when the helper serves it at http://127.0.0.1:7777. Websites, other programs' web pages, and pages opened straight from a file are refused, so a website you visit can't give Marshall orders, read your to-do list or press buttons for you.
+- **The helper only answers this computer** (`127.0.0.1`) and serves nothing but the village page's own files.
+
 
 - The helper only listens on `127.0.0.1` (this computer), and only answers the village page.
 - It removes `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` before starting Claude Code, so Claude Code can't fall back to a pay-per-use API key.
