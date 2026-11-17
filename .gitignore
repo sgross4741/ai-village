@@ -1,0 +1,4 @@
+# The helper's private memory and logs stay on your computer
+helper/marshall-home/
+.DS_Store
+*.zip

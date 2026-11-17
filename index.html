@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My AI Village</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1c120c; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
+  .panel {
+    position: fixed; color: #f1e6c8; background: rgba(46, 29, 20, 0.85);
+    border: 2px solid #7e4f2c; box-shadow: 0 0 0 2px #2e1d14;
+    font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; padding: 6px 10px;
+  }
+  #where { top: 12px; left: 12px; font-weight: bold; }
+  #help { bottom: 12px; left: 12px; max-width: calc(100vw - 48px); }
+  #help.hidden { display: none; }
+  #help b { color: #e8b84a; font-weight: normal; }
+  #brain { top: 12px; right: 12px; font-size: 12px; }
+  #brain.on { color: #a9cd62; }
+  /* chat box (right) and chat log (left); both can be opened and closed any time */
+  .side { top: 56px; bottom: 96px; width: min(360px, calc(50vw - 40px)); display: flex; flex-direction: column; padding: 0; }
+  .side.hidden { display: none; }
+  #chat { right: 12px; }
+  #log { left: 12px; }
+  .side header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 2px solid #7e4f2c; }
+  .side header .title { flex: 1; font-weight: bold; color: #e8b84a; }
+  .side header .sub { display: block; font-weight: normal; color: #c9b496; font-size: 12px; }
+  .side .x { font: inherit; color: #f1e6c8; background: none; border: 0; cursor: pointer; padding: 0 4px; font-size: 16px; }
+  .lines { flex: 1; overflow-y: auto; padding: 8px 10px; }
+  .lines p { margin: 0 0 7px; }
+  .lines .who { color: #e8b84a; }
+  .lines .to { color: #c9b496; }
+  .lines .task .who { color: #a9cd62; }
+  .lines .report .who { color: #9ac4e0; }
+  .lines .note, .lines .system { color: #c9b496; font-size: 12px; }
+  .lines .problem { color: #e8a090; }
+  .lines .time { color: #8c765e; font-size: 11px; margin-right: 4px; }
+  #chat-form { display: flex; gap: 6px; padding: 8px 10px; border-top: 2px solid #7e4f2c; }
+  #chat-input {
+    flex: 1; min-width: 0; font: inherit; color: #2e1d14; background: #f1e6c8;
+    border: 2px solid #7e4f2c; padding: 6px 8px;
+  }
+  .btn { font: inherit; color: #f1e6c8; background: #7e4f2c; border: 2px solid #2e1d14; padding: 4px 10px; cursor: pointer; }
+  #chat-status { font-size: 12px; color: #c9b496; padding: 0 10px 8px; min-height: 1em; }
+  #next-batch { margin: 0 10px 8px; }
+  #next-batch.hidden { display: none; }
+  /* the to-do list (opens under the toolbar) */
+  #todo { top: 56px; left: 50%; transform: translateX(-50%); width: min(460px, calc(100vw - 48px)); max-height: calc(100vh - 170px); display: flex; flex-direction: column; padding: 0; }
+  #todo.hidden { display: none; }
+  #todo header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 2px solid #7e4f2c; }
+  #todo header .title { flex: 1; font-weight: bold; color: #e8b84a; }
+  #todo-form { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 2px solid #7e4f2c; }
+  #todo-input { flex: 1; min-width: 0; font: inherit; color: #2e1d14; background: #f1e6c8; border: 2px solid #7e4f2c; padding: 6px 8px; }
+  #todo-list { list-style: none; margin: 0; padding: 6px 10px; overflow-y: auto; }
+  #todo-list li { display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px dashed #5a3620; cursor: default; }
+  #todo-list li:last-child { border-bottom: 0; }
+  #todo-list .box { color: #e8b84a; }
+  #todo-list .text { flex: 1; }
+  #todo-list .state { display: block; font-size: 12px; color: #c9b496; }
+  #todo-list li.done .text > span:first-child { text-decoration: line-through; color: #8c765e; }
+  #todo-list li.done .box { color: #a9cd62; }
+  #todo-list li.problem .state { color: #e8a090; }
+  #todo-empty { color: #c9b496; font-size: 12px; padding: 8px 10px; }
+  #todo-tip {
+    position: fixed; z-index: 20; display: none; max-width: 380px; padding: 8px 10px;
+    color: #f1e6c8; background: #2e1d14; border: 2px solid #e8b84a; box-shadow: 0 0 0 2px #2e1d14;
+    font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; pointer-events: none; white-space: pre-wrap;
+  }
+  #todo-tip b { color: #e8b84a; font-weight: normal; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="where" class="panel">Town</div>
+<div id="help" class="panel">
+  You are the <b>Sheriff</b> &nbsp;·&nbsp; <b>Arrows / WASD</b> walk &nbsp;·&nbsp; walk into a door to go in or out<br>
+  <b>+ / −</b> or <b>mouse wheel</b> zoom &nbsp;·&nbsp; <b>0</b> Sheriff size &nbsp;·&nbsp; <b>F</b> whole town &nbsp;·&nbsp; <b>H</b> hide this<br>
+  <b>T</b> talk to whoever is next to you &nbsp;·&nbsp; <b>M</b> talk to Marshall &nbsp;·&nbsp; <b>L</b> chat log &nbsp;·&nbsp; <b>Esc</b> close
+</div>
+<div id="brain" class="panel">Village brains: checking…</div>
+<div id="chat" class="panel side hidden">
+  <header><span class="title" id="chat-title">Marshall</span><button class="x" id="chat-close" title="Close (Esc)">×</button></header>
+  <div class="lines" id="chat-lines"></div>
+  <button class="btn hidden" id="next-batch">Send next batch</button>
+  <form id="chat-form" autocomplete="off">
+    <input id="chat-input" maxlength="2000" placeholder="Say something…">
+    <button class="btn" type="submit">Send</button>
+  </form>
+  <div id="chat-status"></div>
+</div>
+<div id="todo" class="panel hidden">
+  <header><span class="title">To-do list</span><button class="x" id="todo-close" title="Close (Esc)">×</button></header>
+  <form id="todo-form" autocomplete="off">
+    <input id="todo-input" maxlength="500" placeholder="Add a task for the town…">
+    <button class="btn" type="submit">Add</button>
+  </form>
+  <ul id="todo-list"></ul>
+  <div id="todo-empty">Nothing on the list yet. Marshall hands each task to the right townsperson; hover over a finished one to see what was done.</div>
+</div>
+<div id="todo-tip"></div>
+<div id="log" class="panel side hidden">
+  <header><span class="title">Chat log<span class="sub">Orders, hand-offs and reports</span></span><button class="x" id="log-close" title="Close (L)">×</button></header>
+  <div class="lines" id="log-lines"></div>
+</div>
+<!-- The world is drawn in code; character sprites are embedded in game/characters.js.
+     No libraries and no external files. The only network requests go to the village
+     helper on this same computer (127.0.0.1): chats, the chat log and notes. -->
+<script src="game/art.js"></script>
+<script src="game/characters.js"></script>
+<script src="game/town.js"></script>
+<script src="game/interiors.js"></script>
+<script src="game/townsfolk.js"></script>
+<script src="game/main.js"></script>
+</body>
+</html>

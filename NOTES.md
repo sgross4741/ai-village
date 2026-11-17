@@ -1,0 +1,218 @@
+# My AI Village — Project Notes
+
+## Ground rules (decided 2026-11-16)
+
+1. **Roles:** You're the director and tell Claude what you want in plain words. Claude builds it.
+2. **What we're building:** a web page that runs on your own computer. Everything lives in the `ai-village` folder.
+3. **Where it's built:** on the cloud machine. Claude sends you the files to download and open on your computer.
+4. **Subscriptions only:** no API keys and no pay-per-use services. Claude double-checks this and confirms it with you before building anything that runs on its own.
+   - Higgsfield is used only through Claude's session to make media (pictures, video, sound), which is saved into the folder as ordinary files.
+   - Anything that moves or reacts on the page is code that runs in your browser and calls no outside service.
+5. **Higgsfield credits:** Claude asks before spending credits on any batch and gives a rough credit estimate first.
+6. **Notes:** Claude records every decision in this file.
+7. **Showing work:** when a piece is finished, Claude shows it to you before moving on.
+8. **Permission:** before creating, overwriting or deleting files, running anything, or spending anything, Claude says in plain words what it's about to do and waits for your yes.
+
+## Build-log rules (decided 2026-11-16)
+
+- Each session records: date, start and end time, Higgsfield credits before and after, Claude usage at start and end, and what was built.
+- Claude checks the Higgsfield balance itself.
+- ~~At the start and end of each session, Claude reminds you to check your Claude usage screen and logs the numbers you give.~~ Dropped at your request (decision 25).
+- Any usage limit you hit, and any extra usage you pay for, gets logged.
+- When the build is done, Claude totals the hours, the Higgsfield credits used and what they cost, your Claude plan, and any extra usage.
+- Times are in UTC unless you ask for local time.
+
+## Project facts
+
+- **Claude plan:** Pro
+- **Higgsfield plan:** free (10 credits at the start)
+- **Higgsfield price per credit:** _blank; fill in at the end_
+
+## Team structure (decided 2026-11-16)
+
+How the Sheriff's team works. Everything built later follows this.
+
+| Level | Who | Runs on | Lives | Rules |
+|---|---|---|---|---|
+| 1 | **The Sheriff** (you) | — | — | At the top. In charge of everything. |
+| 2 | **The Deputy** (Marshall) | Opus 5.5 | Town hall | Your right hand. Follows you, takes your orders, passes them to the right townsperson, and will help you find people to hire. |
+| 3 | **Townspeople** (the "directors") | **Opus 5.5 with advisor turned on**, checking with **Fable 5.1** when something is hard | **One house each**, only townspeople get a house | Each owns **one area of your life**. |
+| 4 | **Workers** (like interns; brown horses in beige saddles; anyone after the 10 townspeople) | **Sonnet 5.5** | No house of their own | Every task comes from **their townsperson**. Their townsperson **checks every piece of their work** before it counts as complete. |
+
+Chain of orders: Sheriff → Deputy → the right townsperson → that townsperson's workers. Work comes back up: worker → townsperson (checks it) → done.
+
+Open questions to settle before building townspeople and workers:
+- Can the advisor check (Opus 5.5 asking Fable 5.1) run through your Pro subscription in Claude Code, or only through the pay-per-use API? On some plans Fable usage bills to usage credits, which would break the "subscriptions only" rule.
+- Fable 5.1 and Sonnet 5.5 availability and usage on the Pro plan.
+
+## Townspeople (decided 2026-11-16)
+
+One townsperson per house, each owning one area of your life. No AI brains yet.
+
+| House | Area | Name | Personality | Quirk | Look |
+|---|---|---|---|---|---|
+| 1 | Prospecting | Clementine "Clem" Pike | Restless optimist, always scouting the next lead | Taps the gold pan on their belt when excited | Straw wide-brim hat, red-checked shirt, suspenders, canvas trousers, small gold pan at the hip |
+| 2 | Sales | Augustus Bell | Silver-tongued, warm handshake, never takes "no" personally | Rings a tiny brass bell whenever a deal closes | Brown bowler hat, mustard waistcoat, white shirt, black string tie, curled mustache |
+| 3 | Delivery | Josephine "Jo" Wheeler | Dependable and blunt; never late | Checks their pocket watch every few minutes | Teamster cap, long tan leather duster, blue neck scarf, heavy boots, watch chain |
+| 4 | Product | Ezra Tinsley | Tinkering perfectionist | Pencil behind the ear; sketches on any surface | Round spectacles, leather work apron over an olive shirt, flat cap, tool belt |
+| 5 | Client Success | Hattie Bloom | Kind and patient; remembers everyone's name and birthday | Brings a pie to every visit | Sage calico prairie dress, white apron, sun bonnet, small basket |
+| 6 | Marketing & Content | Rufus Quill | Showman and storyteller | Talks in newspaper headlines | Newsboy cap, red-and-cream striped vest, sleeve garters, red bow tie, ink-stained fingers |
+| 7 | Partnerships & Community | Winona Hart | Natural connector; throws the best barn dances | Knows everyone's cousin | Fringed suede jacket, turquoise necklace, long dark braid, riding skirt, boots |
+| 8 | Finance & Admin | Mortimer Penny | Careful and calm; counts everything twice | Polishes coins while thinking | Charcoal three-piece suit, pince-nez glasses, neat side-parted hair, ledger under one arm |
+| 9 | Legal & Compliance | Beatrice Stone | Firm but fair; reads every word of the fine print | Quotes rule numbers from a little black rulebook | High-collared navy blouse, long dark skirt, hair in a tight bun, small round hat, rulebook |
+| 10 | Operations & Analytics | Silas Tally | Quiet systems thinker who spots patterns first | Tallies everything on a chalk slate | Brown plaid shirt, wool vest, chalk slate at the hip, cap, rolled sleeves |
+
+Townspeople mostly hang out in their own yard and house. Only the Sheriff and Marshall walk around town.
+
+## Movement rules (decided 2026-11-16)
+
+1. **Working:** walk home, go inside, and sit at your desk. (Stand-in until townspeople have real tasks: the **Work Hours** button. Later, someone works while they have an open task.)
+2. **When the Sheriff walks near someone,** they stop and turn to look, in case the Sheriff wants to talk. It starts when the Sheriff is *walking* toward them and lasts while the Sheriff stays close. Nobody stops for this in a doorway or right in front of one, or on the way to a meeting (they're already walking there with the Sheriff).
+3. **Free time:** wander the whole town along the paths. If two people bump into each other and haven't talked **today** (the real calendar day), both stop, ask what the other is working on, and **both write it in their `NOTES.md`** under "Conversations". If they already talked today, they walk on by.
+4. **Stay on the paths** (street, square, boardwalks, yard paths, and your own yard), walk around each other, and never walk through walls.
+5. **Nobody teleports.** To go inside, walk to the door and through it. This includes meetings: everyone walks to the town hall, the Sheriff too (on autopilot; any arrow key takes back control).
+6. **Nobody stands on furniture, fences, or on top of each other.** Sitting at your own desk, or on a meeting bench or chair, is the only exception.
+
+How it works: everyone moves one square at a time and must claim the next square before stepping into it, so two people can never share a square. Doorways take one person at a time; if two meet head-on, the one coming in steps back. Stuck behind someone: look for a way around, then step aside.
+
+## Decisions log
+
+| # | Date | Decision |
+|---|------|----------|
+| 1 | 2026-11-16 | Project name: My AI Village. Folder: `ai-village`. |
+| 2 | 2026-11-16 | Build on the cloud machine; you download the files to run them. |
+| 3 | 2026-11-16 | Adopted the ground rules and build-log rules above. |
+| 4 | 2026-11-16 | Leave the price per credit blank until the final totals. |
+| 5 | 2026-11-16 | The village is a top-down 16-bit RPG town. Each AI agent will later live and work in a house of its own. |
+| 6 | 2026-11-16 | First build an empty town (nobody in it): houses, paths, trees, a town square and a town hall. Every house can be entered. |
+| 7 | 2026-11-16 | Style guide saved in `STYLE_GUIDE.md`. Its paragraph goes word for word into every art prompt. |
+| 8 | 2026-11-16 | Town map: one big top-down image with 10 houses around a town square, a town hall, paths from every front door, grass, trees, a fountain, and open yard in front of each house. |
+| 9 | 2026-11-16 | Make 5 draft maps at low quality (about 0.25 credits each), one per period: Medieval European, Ancient Roman, Edo-period Japanese, 1880s American frontier, Victorian English. You'll pick one, and we may remake it at higher quality. |
+| 10 | 2026-11-16 | Map images are saved in `art/maps/`. |
+| 11 | 2026-11-16 | GPT Image 2.6 needs a paid Higgsfield plan. All 5 draft requests were turned down and nothing was charged. Switched to Z Image (0.15 credits per image), which works on the free plan. Tested 1 Medieval map before making the rest. |
+| 12 | 2026-11-16 | Allowed Higgsfield's image host (`d8j0ntlcm91z4.cloudfront.net`) in the Default cloud environment so generated art can be downloaded. You approved this. |
+| 13 | 2026-11-16 | Z Image doesn't follow layouts closely, so the AI maps are **mood pictures only**, not the playable map. |
+| 14 | 2026-11-16 | Made the other 4 mood maps (Roman, Edo, Frontier, Victorian). Z Image allows about 2 jobs at a time, so some requests were rate-limited and resent; rate-limited requests aren't charged. |
+| 15 | 2026-11-16 | **Chosen period: 1880s American frontier town.** `art/maps/map-4-frontier.png` is the style reference. |
+| 16 | 2026-11-16 | Option C approved: build the real, walkable map in code from small pixel-art tiles, matching the Frontier picture. |
+| 17 | 2026-11-16 | You walk around as a **plain visitor marker**, a cream game-piece pawn that's clearly not an agent. |
+| 18 | 2026-11-16 | Town layout (60×44 tiles): main street; a big dirt square with a fountain, trough and 4 benches; a road out to the south. The **town hall** is a whitewashed false-front building at the top center. **Houses 1–6** sit in a row along the top (3 on each side of the hall), **7–8** on the west side, and **9–10** on the east side. Each house has its own roof and wall colors, and a fenced yard with a gate and a path. |
+| 19 | 2026-11-16 | In this three-quarter view only a building's front (south) wall shows, so every door is on that wall. North-row doors open onto the street and square; side houses have a path from their gate into the square. |
+| 20 | 2026-11-16 | Every house and the town hall can be entered. Houses are empty, furnished rooms (bed, shelf, stove, table, chairs, rug, plants) with their own colors. The town hall is a meeting room (lectern, long table, benches). Walk onto the doorway to leave. |
+| 21 | 2026-11-16 | Controls: arrows/WASD to walk, +/− or mouse wheel to zoom (1× up to 16×, stays crisp), F for the whole town, H to hide the help. |
+| 22 | 2026-11-16 | Subscription check passed: the page loads only its own files, makes zero network requests, and uses no API keys or outside services. It works offline. Tested in a browser on the cloud machine. |
+| 23 | 2026-11-16 | Nano Banana Pro (4K, about 4 credits) chosen for the next high-res generation, using the Frontier map as reference. |
+| 24 | 2026-11-16 | **Rule: every front door must have a clear path. Nothing may sit in front of a door.** Checked all 11 doors, which were already clear. Added a permanent safeguard in `game/town.js`: on load, it removes any object from a door's path and reports any door that can't be reached. |
+| 25 | 2026-11-16 | Stop the Claude-usage reminders and logging; you don't need them any more. Higgsfield credits are still logged. |
+| 26 | 2026-11-16 | Next generation: a polished 4K version of *our* code-built Frontier map, using a clean render of the town as the reference. After that, zip the folder for download. |
+| 27 | 2026-11-16 | Allowed `upload.higgsfield.ai` in the Default cloud environment so reference pictures can be uploaded. You approved this. |
+| 28 | 2026-11-16 | Nano Banana Pro turned out to need Higgsfield's **Plus plan or higher**. The request was refused and nothing was charged. |
+| 29 | 2026-11-16 | Z Image can't take a reference or make 4K. **Keep the code-built town as is**, with no 4K repaint. |
+| 30 | 2026-11-16 | House interiors: one Higgsfield image per house. Rules: a standing person is 1/12 of the image height (small furniture, open floor); the room fills the whole image; thin back wall at the top; one door centered in a thin bottom wall; no people; every room has one desk and chair for its owner. Low-res drafts first. |
+| 31 | 2026-11-16 | Drafts made with Z Image (0.15 credits each). House 1 test made first. Saved in `art/interiors/drafts/`. |
+| 32 | 2026-11-16 | The Z Image test missed the rules: black border, thick walls, too large a scale, no desk and chair. **Switched to the free code route** for all 10 houses and the town hall. The draft is kept for reference only. |
+| 33 | 2026-11-16 | New room spec, in code: every room is 25×15 tiles (400×240 px), and the visitor is about 20 px tall, so **a person is 1/12 of the room's height**. A room automatically **fills the screen** when you walk in, and the town goes back to your zoom when you leave. **Thin walls:** a one-tile back-wall strip with small windows at the top, thin side walls, and a thin bottom wall with **one door centered**. Walls are checked in pixels, so you can walk right up to them. |
+| 34 | 2026-11-16 | Every house has a bed, two shelves, a washstand, a stove, an armchair, chests, plants, a small dining table on a rug, and **one writing desk with a chair for its owner** (against the right wall; the layout is mirrored in houses 2, 4, 6, 8 and 10). Each house has its own wallpaper, floor, rug and quilt colors. |
+| 35 | 2026-11-16 | The town hall has a lectern, two shelves, a meeting table with chairs, four benches with an aisle down the middle, and **one clerk's desk with a chair**. |
+| 36 | 2026-11-16 | Rule carried into the rooms: **nothing in front of the door.** The lane from each room's door stays open, and the code reports an error if furniture is ever placed there. Walking down near the door lines you up with it automatically. |
+| 37 | 2026-11-16 | **Characters.** You are **the Sheriff, in charge of the village.** Made from your photo, which was uploaded to Higgsfield at your request. Outfit: brown wide-brim cowboy hat, **green flannel shirt**, brown leather vest, gold star badge, gunbelt with an empty holster, dark trousers, brown boots. Keep your face and red-brown beard. |
+| 38 | 2026-11-16 | **Character sheet spec (every character):** a walking sheet of 4 rows × 3 columns, equal frames, plain background. Row 1 walks toward the camera, row 2 walks right, row 3 walks left, row 4 walks away (we see the back). In each row: left foot forward, standing, right foot forward. Big obvious stride, legs clearly different, arms swinging. Same person, outfit and size in all 12 frames. Style guide word for word. |
+| 39 | 2026-11-16 | **Rule for every character after the first:** give Higgsfield an existing character sheet as the reference and ask it to redraw it as a DIFFERENT person in the same style, proportions and grid. Never make one from words alone. |
+| 40 | 2026-11-16 | Seedream 4.5 needs a paid plan (refused, 0 credits). **Seedream 5.0 Flash works on the free plan** (0.5 credits at 2K, takes reference images). Sheriff sheet v1 saved as `art/characters/sheriff/sheriff-walk-sheet-v1.png`. |
+| 41 | 2026-11-16 | v1 problems: row 3 mixed directions, row 2 had no standing frame, stiff arms. **Fix = retry and patch in code (option C).** The retry used 3 references: the v1 sheet (look and style), your photo (face) and your example sheet (**layout and poses only**, not its style or person). |
+| 42 | 2026-11-16 | **Sheriff sheet v2 is approved for processing:** all 4 directions are correct, each row has a real standing middle frame, and the arms swing. Saved as `sheriff-walk-sheet-v2.png`. Small leftover: two holsters instead of one. |
+| 43 | 2026-11-16 | Code step (free): a script cuts the sheet into 12 frames, removes the background, puts every foot on one baseline at one shared scale, reduces to a small shared palette and adds a dark outline. Outputs: `sheriff-walk-22px.png` (1/12 room scale, but the face is lost) and `sheriff-walk-44px.png` (face, beard and badge readable). |
+| 44 | 2026-11-16 | **Option B chosen: double the world's detail.** Every picture of the world (ground, buildings, trees, furniture, rooms) is now drawn at **2 art pixels per world pixel** using Scale2x, a classic pixel-art doubling method that makes diagonal edges finer while keeping pixels crisp. A fine texture pass adds single-pixel detail to the grass, dirt and wood floors. Layout, doors, paths and every rule are unchanged. |
+| 45 | 2026-11-16 | Characters use the same double detail: the Sheriff sprite is 36×40 art pixels, or 18×20 world pixels, so he was **exactly 1/12 of a room's height** at the time (`sheriff-walk-40px.png`); see 47 for the change to 1/8. Zoom steps are even numbers (1, 2, 4, 6, 8…) so every art pixel stays crisp. |
+| 46 | 2026-11-16 | **You walk around as the Sheriff** instead of the visitor marker. He walks in all four directions with the left foot, stand, right foot, stand cycle, and stands still when you stop. The sprite is embedded in `game/characters.js`, so it still works offline from the folder. |
+| 47 | 2026-11-16 | **Size changed to 1/8:** a person is now **one eighth of a room's height**, replacing the 1/12 rule. The room design stays the same (fills the screen, thin walls, one centered door, a desk and chair in every room), but rooms are now **17×10 tiles** (272×160 px) and the furniture is re-laid to fit. The Sheriff stays 20 px tall. |
+| 48 | 2026-11-16 | **Same size outside:** in town, the view keeps the Sheriff at **1/8 of the screen height**, matching the rooms. Zooming (+/−, mouse wheel) still works, **0** snaps back to Sheriff size, and **F** shows the whole town. Coming out of a building returns to the view you had. |
+| 49 | 2026-11-16 | **Marshall, the Deputy, is added.** Your right hand. They live in the **town hall**, with the clerk's desk and chair as their seat. Their job: follow you everywhere, take your orders and pass them to the right person, and later help you find new people to hire. **For now it's just you and Marshall, nobody else.** |
+| 50 | 2026-11-16 | Marshall's look: sand-colored cowboy hat, blue denim shirt, tan canvas vest, a **silver** deputy star (your star is gold), red bandana, brown trousers and boots. Different face (clean-shaven, short dark hair). Made with Seedream 5.0 Flash from **your Sheriff sheet as the reference** (redrawn as a different person, per rule 39), plus your example sheet for poses only: 0.5 credits. Row 3 (walking left) came out with mixed directions, so it was **fixed for free by mirroring row 2**; no retry was needed. |
+| 51 | 2026-11-16 | Sprite clean-up improved for both characters: background trapped between the legs is now removed. |
+| 52 | 2026-11-16 | **Marshall in the game (plain code, no AI yet):** waits beside their desk in the town hall. When you walk up to them (within 3 tiles), they **follow you everywhere**, about two steps behind along the path you walked, through every door, in and out of buildings. They stop when you stop and turn to face you. Same size as you (1/8). |
+| 53 | 2026-11-16 | **Marshall runs on Opus 5.5:** the Claude API is ruled out (needs an API key and is pay-per-use). Checked the alternative: a small helper on your computer that uses **Claude Code signed in with your Pro subscription** (`claude -p`, not `--bare`, uses your login; no API key). The docs list Opus 5.5 as Pro's default model in Claude Code. Usage counts against your Pro limits (a 5-hour session limit plus a weekly limit, shared with claude.ai). Keep **usage credits OFF** so nothing is pay-per-use. Built: see 54–58. |
+| 54 | 2026-11-16 | **Marshall's helper is built** (`helper/marshall-helper.js`, plain Node.js, no extra packages). It runs on your computer only while you start it, listens only on 127.0.0.1:7777, and answers only the village page (other websites get refused). For each order it runs **Claude Code with your Pro login** (`claude -p`, model `claude-opus-5-5`). It **strips ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN** so Claude Code can't fall back to pay-per-use, **switches every tool off** (`--disallowedTools "*"`) so Marshall can only talk, and runs in an empty `helper/marshall-home/` folder. |
+| 55 | 2026-11-16 | Marshall's personality and job are in `helper/marshall-persona.md` (editable): your right hand; short frontier-flavored replies; never invents townsfolk; for each order, says who should do it (themselves, or the kind of person to hire). Replies come back in a fixed shape (reply / is it an order / order summary / who it goes to). |
+| 56 | 2026-11-16 | Marshall **remembers the conversation** (it resumes the same Claude Code session) and keeps a **ledger of orders** (`marshall-home/orders.json`). Orders for people who don't exist yet wait "for someone to be hired". Each reply is logged in `marshall-home/usage-log.csv` (time and tokens) for the build log. |
+| 57 | 2026-11-16 | **Order box in the page:** press **T** (or Enter) to open it, type an order, Send; **Esc** closes. While you type, keys don't move the Sheriff. A thinking bubble shows over Marshall while they work. The top-right corner shows whether Marshall's brain is connected. If the helper is off, Marshall says so plainly. Setup steps are in `helper/README.md`. |
+| 58 | 2026-11-16 | Subscription check for the helper: no API key, no pay-per-use; it uses your Pro allowance (5-hour and weekly limits, shared with claude.ai). **Keep usage credits off.** The page's only network request is to the helper on your own computer. |
+| 59 | 2026-11-16 | Marshall's helper runs on **your Mac**, started from Claude Code there. This cloud session keeps building the village. Updates reach your computer as a fresh zip, or through the Claude Code session on your Mac. |
+| 60 | 2026-11-16 | **First real test with Marshall**, run by you on your Mac. Problems: "no reply" to a joke, and a long reply complaining about a "StructuredOutput tool" being denied. Cause: the fill-in form (`--json-schema`) needs a hidden tool, and all tools are off. Also too long, because Marshall was speaking on top of Claude Code's coding-assistant instructions. **Fix:** no form. Marshall answers in three plain lines (`SAY` / `ORDER` / `FOR`), which the helper reads. Marshall's instructions now **replace** Claude Code's (`--system-prompt`, falling back to the old add-on way on an older Claude Code). Replies are 1–2 sentences, under 35 words, on topic, no formatting, never mentioning computers or tools. The helper strips formatting and trims anything over about 260 characters at a sentence end. A change to Marshall's instructions starts a fresh conversation automatically. Every tool stays off. |
+| 61 | 2026-11-16 | **Team structure saved** (see "Team structure" above): Sheriff → Deputy → townspeople (one area of your life and one house each; Opus 5.5 with advisor on, checking with Fable 5.1) → workers (Sonnet 5.5, interns, tasks only from their townsperson, every piece of work checked by them). Only townspeople get houses. Nothing built yet. Subscription check for the advisor and Fable is still to do. |
+| 62 | 2026-11-16 | **Ten townspeople approved** (see "Townspeople" above), one per house in the order you listed the areas. Character sheets: Seedream 5.0 Flash, redrawn from **Marshall's sheet** as a different person (rule 39), about 0.5 credits each (about 5.0 in total, approved). Wrong-facing rows get fixed in code by mirroring, not by paid retries. |
+| 63 | 2026-11-16 | **All 10 townspeople made** with Seedream 5.0 Flash from Marshall's sheet: 5.0 credits, exactly as quoted. Higgsfield only runs one Flash job at a time on this plan, so they were made one after another; turned-away requests cost nothing. Every left-walk row was rebuilt by mirroring the right-walk row (free) so all ten are consistent. Sheets and sprites are in `art/characters/<name>/`. |
+| 64 | 2026-11-16 | **Townspeople moved in** (`game/townsfolk.js`, plain game code, no AI yet). Each lives in their own house and **only** uses their own fenced yard and their own room. They stroll between spots, pause, face around, and about 30% of the time go inside or come out through their own door, finding their way around furniture. **They never stop in their own doorway or on the path in front of it**, inside or out. About 4 in 10 start the day indoors. Strolling speed is slower than the Sheriff's. |
+| 65 | 2026-11-16 | A small **name card** (name and area) appears at the top of the screen when the Sheriff stands next to a townsperson. |
+| 66 | 2026-11-16 | **Every townsperson is a real agent with their own folder** in `agents/<name>/`. `INSTRUCTIONS.md` is short and covers who they are (name, house, personality, quirk), their job (their one area of your life), who they report to (Marshall, then you; your word wins), and who reports to them (their workers, none yet: every worker task comes from them and they check every piece of work). It also says how they work: Opus 5.5 with the Fable 5.1 advisor, stay in their own area, **never spend, sign or contact anyone outside the town without your yes**, keep replies short. `NOTES.md` is their memory: they read it before every task and add short, dated entries after. `agents/README.md` lists them all. They don't run yet. |
+| 67 | 2026-11-16 | **Advisor check (from Claude Code's docs).** Claude Code has an advisor feature (experimental): `/advisor <model>`, the `advisorModel` setting, or `--advisor`. It works on subscriptions and in `claude -p` (Claude Code v2.1.260 or later). For an Opus 5.5 main model, the advisor can be **Fable** or **Opus 5 / 5.5**. On subscriptions, advisor usage counts against plan limits, **except that a Fable advisor bills to usage credits on plans where Fable usage does**. The docs don't say whether Pro is one of those plans. In `-p` mode, Fable requests that need credits are billed without asking. **Open: you need to check `/model` in Claude Code on your Mac for a "Requires usage credits" label on Fable.** If it's there, Fable as the advisor would break the subscriptions-only rule, and the safe fallback is Opus 5.5 as the advisor (included in your plan). |
+| 68 | 2026-11-16 | **Menu bar with a Call Meeting button** at the top of the screen (shortcut **M**). **Call Meeting:** the screen fades and everyone gathers in the town hall. You stand at the head of the table by the lectern, **Marshall (your chief of staff)** beside you, and the ten townspeople ("directors") in two rows facing you. The door lane stays clear. They stay put for the whole meeting, even if you walk around. The button becomes **End Meeting**. **End Meeting:** the townspeople go back to their own yards and their normal routine; you and Marshall end up on the boardwalk in front of the town hall, and Marshall follows you again. Works from anywhere, including from inside a house. The name card moved down to make room for the menu bar. |
+| 69 | 2026-11-16 | **Movement rules adopted** (see "Movement rules" above). Townspeople and Marshall now walk square by square along real routes, door by door. The Sheriff walks freely, or square by square on autopilot. |
+| 70 | 2026-11-16 | **Meetings changed to fit "nobody teleports":** Call Meeting sends everyone *walking* to the town hall. The Sheriff goes to the head of the table (autopilot) and Marshall beside them. The ten townspeople **sit** on the two meeting benches and the two chairs at the table, filling the seats farthest from the door first. End Meeting: the Sheriff and Marshall walk out to the boardwalk in front of the hall (Marshall then follows again), and the townspeople file out one by one. **The two chairs on the top side of the town hall table were removed** so the Sheriff can reach the head of the table. |
+| 71 | 2026-11-16 | **Work Hours button** added to the menu bar (stand-in until real tasks): everyone walks home and sits at their desk; turn it off and they go back to their day. |
+| 72 | 2026-11-16 | **Conversation notes** are written into each townsperson's `NOTES.md` by Marshall's helper (new `/note` request; it only accepts known townspeople and short one-line notes). If the helper isn't running, notes wait in the browser and are saved once it's back. Notes only say what's true: right now, "nothing assigned yet". **The helper on your Mac needs updating to this version.** |
+| 73 | 2026-11-16 | Fixed along the way: room bottom walls now count as solid for walkers (only the door is open). |
+| 74 | 2026-11-16 | **Talking to everyone.** Walk up to anyone and press **T**: a chat box opens on the **right**. Townspeople answer in their own personality, knowing their `INSTRUCTIONS.md` and `NOTES.md`, and add what they learn to their notes ("What I've learned"). While the chat is open they stay put and face you. If nobody is next to you, T talks to Marshall. |
+| 75 | 2026-11-16 | **M (or the Deputy button) opens Marshall's chat from anywhere.** M no longer calls meetings; that's the Call Meeting button only. |
+| 76 | 2026-11-16 | **Delegation:** Marshall replies to you, then hands the order to the right townspeople as short tasks. **At most 3 per order**; if more are needed, Marshall says so and a **Send next batch** button appears (batches of 3, sent when you say). A townsperson with a task walks home, works at their desk (thinking bubble), reports back to Marshall, then returns to their day. |
+| 77 | 2026-11-16 | **Chat log on the left** (L, or the Chat Log button): every order, hand-off and report as it happens, with times. Boxes open and close any time (Esc or ×). |
+| 78 | 2026-11-16 | **Brains:** everyone runs on Opus 5.5 through Claude Code with your Pro login (no API key, no pay-per-use, usage credits off). Townspeople use **Opus 5.5 as the advisor** (Fable not used, since it may bill to usage credits on Pro); this can be switched later. All tools off: everyone only talks. At most 2 runs at once. Every run is logged in `helper/marshall-home/runs-log.csv`. Townspeople's instructions now say "check with your advisor" instead of "Fable 5.1". |
+| 79 | 2026-11-16 | The helper (`helper/marshall-helper.js`, same file and start command) became the **village helper** for everyone. **The copy on your Mac must be replaced** for any of this to work there. |
+| 80 | 2026-11-17 | **To-do list in the toolbar** (To-Do button, which shows how many are open). Type a task: Marshall picks the right townsperson (several only if truly needed, still at most 3 at a time) and hands it over; that townsperson walks home, works at their desk and reports back. Each line shows who has it and whether they're working on it. **Done items are crossed off; hovering shows exactly what was done** (each townsperson's own account, up to about 120 words, with the time). If nobody in town fits, the item stays open with Marshall's note (for example, "we'd need to hire a stable hand"). |
+| 81 | 2026-11-17 | The list is kept by the helper on your computer (`helper/marshall-home/todos.json`), so it survives reloading the page. Honest limit: townspeople only think and talk, so "done" means they've worked it out and reported back (a plan, a draft, advice), not acted in the real world. |
+| 82 | 2026-11-17 | **Only 10 townspeople spots.** Anyone added after the ten is a **worker**. |
+| 83 | 2026-11-17 | **Workers are brown horses wearing a beige saddle.** One shared Worker sheet for all of them (`art/characters/worker/`), made with Seedream 5.0 Flash using Marshall's sheet as the reference (rule 39). 0.5 credits. |
+| 84 | 2026-11-17 | The horse sheet came back with only the left-walking row right, one front-facing frame and no back view. Free fix: right = left mirrored, toward-you = the front frame with a small bob, away = side view for now. A 0.5-credit retry for proper front/back views is optional and needs your yes. |
+| 85 | 2026-11-17 | **Every townsperson starts with one worker**, all with different names: Biscuit (Clem), Clover (Augustus), Dusty (Jo), Hickory (Ezra), Maple (Hattie), Pepper (Rufus), Juniper (Winona), Chestnut (Mortimer), Ranger (Beatrice), Tumbleweed (Silas). Each has a folder at `agents/<townsperson>/workers/<name>/` with `INSTRUCTIONS.md` and `NOTES.md`. **No tasks yet**, and no brain yet (T gets a friendly whinny). |
+| 86 | 2026-11-17 | **Workers live in their townsperson's yard** (never in front of the door), never go indoors, don't attend meetings and have no desk. During meetings and Work Hours they wait in the yard. |
+| 87 | 2026-11-17 | **Workers roam the whole town on the paths.** Bumping into someone they haven't talked to today: both stop, ask what the other is working on, and both take notes. Already talked today: walk on by. |
+
+## Build log
+
+### Session 1 — 2026-11-16
+
+| Item | Value |
+|---|---|
+| Start | 02:39 UTC |
+| End | _in progress_ |
+| Higgsfield credits before | 10 (free plan) |
+| Higgsfield credits after | _pending_ |
+| Claude usage at start | _waiting for your numbers_ |
+| Claude usage at end | _pending_ |
+| Usage limits hit / extra usage | none so far |
+
+**Built:**
+- Created the `ai-village` folder and this notes file.
+- Saved `STYLE_GUIDE.md`.
+- Tried 5 draft maps on GPT Image 2.6: blocked (needs a paid plan), 0 credits spent.
+- Made 1 test map (Medieval) on Z Image for 0.15 credits and saved it as `art/maps/map-1-medieval.png`. Balance: 10 → 9.85.
+- Made 4 more mood maps (Roman, Edo, Frontier, Victorian) for 0.6 credits. Balance: 9.85 → 9.25 (as of 03:01 UTC). You chose Frontier.
+- Built the walkable Frontier town in code (`index.html` plus `game/`): 10 houses, a town hall, a fountain, yards, paths and trees, with every building enterable. 0 credits. Balance still 9.25 at 03:15 UTC.
+- Added the "nothing in front of a door" safeguard. Tried a 4K repaint with Nano Banana Pro: refused (needs the Plus plan), 0 credits.
+- House 1 interior test draft (Z Image): 0.15 credits. Balance: 9.25 → 9.10.
+- Rebuilt all 10 house interiors and the town hall in code to the new room rules (0 credits). Tested: walked into and out of all 11 rooms, with no errors and zero network requests. Balance 9.10 at 13:25 UTC.
+- Sheriff walking sheet v1 (Seedream 5.0 Flash, from your photo): 0.5 credits. Balance: 9.10 → 8.60.
+- Sheriff walking sheet v2 (retry with 3 references): 0.5 credits. Balance: 8.60 → 8.10. Cut into game sprites at 22 px and 44 px (free).
+- Doubled the world's detail and made the Sheriff the player (free). Tested: all 11 doors and rooms still work, no errors, no network requests. Balance 8.10.
+- Changed to the 1/8 size in rooms and in town (free). Checked at three screen sizes: in town the Sheriff is 1/8 of the screen. All rooms walk in and out, with no errors and no network requests. Made a fresh zip.
+- Marshall's walking sheet (Seedream 5.0 Flash): 0.5 credits. Balance: 8.10 → 7.60. Row 3 fixed by mirroring (free). Marshall added to the game with follow behavior (free). Tested: Marshall joins in the town hall and follows through town and into House 3; all doors and rooms still work; no errors; no network requests.
+- Built Marshall's helper and the order box (free). Tested end-to-end on the cloud machine with a **stand-in for Claude Code** (this machine isn't signed in as you): orders go page → helper → Claude Code with the right settings, the API key is stripped, the conversation is resumed, and orders and usage are logged. Other websites are refused, and the page explains when the helper is off. **Not yet tested with your real Claude account:** the first real run happens on your computer. Balance 7.60 at 15:14 UTC.
+- You installed Claude Code and signed in with Pro, with usage credits off. Made a fresh `ai-village.zip` that includes Marshall and the helper (the helper's private `marshall-home` folder is left out). Installing Node.js and starting the helper have to happen on your computer: this session runs in the cloud, and no folder of yours is connected.
+- Sharing the folder with this cloud session (Remote Control) didn't show up, so it isn't available on your account yet. Fixed "zsh: command not found: claude" on your Mac (installed Claude Code with the official installer, added `~/.local/bin` to PATH, signed in with Pro). **Node.js installed and Marshall's helper running on your computer: "Marshall's brain: connected."**
+- Fixed Marshall's replies after your first real test (see 60). Tested with a stand-in that copies the real problems (bold text, rambling, a joke, an order, an old confused conversation, an older Claude Code). All handled. Free. Made a fresh zip.
+- Made the 10 townspeople's character sheets: 5.0 credits. Balance: 7.60 → 2.60. Moved them into their houses with yard-and-house strolling (free). Tested: in one minute every townsperson spent time both in their yard and inside, nobody left home, nobody stopped in a doorway; all 11 doors and rooms still work; Marshall still follows. 19:33 UTC.
+- Gave each townsperson their own agent folder with instructions and a notes file (free).
+- Checked the advisor and Fable rules in Claude Code's docs (see 67). Made a fresh zip with everything.
+- Added the Call Meeting / End Meeting button (free). Tested: meeting called from inside House 3; everyone gathered in the town hall and stayed put; after the meeting all ten were back in their own yards, you and Marshall were in front of the town hall and Marshall followed again. All doors and rooms still work.
+- Movement rules built and tested (free). In 75 seconds of free time: nobody stood on furniture, left the paths, teleported, went through a wall or stood on anyone; 11 pairs chatted and all ten notes files got entries. Walking up to someone made them stop and look. Work Hours seated all ten at their own desks in about 22 s. A meeting gathered everyone seated in about 22 s; afterwards you and Marshall were out front in 5 s, and everyone had filed out of the hall in about 36 s. Doors, rooms and Marshall following all still work.
+- Built chats with everyone, Marshall's delegation in batches of 3, and the chat log (free). Tested on the cloud machine with a **stand-in for Claude Code**: Marshall split a 5-part order, handed out 3, held 2 until "Send next batch", all five reported back and wrote notes; T opened the nearest townsperson's chat and they stayed put facing you; boxes opened and closed; no API key reached Claude Code; every tool was off. Movement rules still pass. **Not yet tested with your real account.**
+- Made a fresh full zip and a small update zip (only changed files; it never touches the townspeople's `NOTES.md` or Marshall's memory).
+
+### Session 2 — 2026-11-17
+
+- Built the to-do list (free). Tested with the stand-in: three items; two went to the right townspeople (newsletter to Rufus, invoices to Mortimer), were worked on, crossed off and showed their full account on hover; the third ("buy a horse") stayed open with Marshall's note that nobody in town fits. The list survived a page reload. Earlier chat and delegation tests still pass. Higgsfield balance unchanged at 2.60.
+- Workers (Session 2, 2026-11-17): made the Worker character sheet (horse in a beige saddle) with Seedream 5.0 Flash: **0.5 credits. Balance: 2.60 → 2.10.** Fixed its walking directions in code (free). Added ten workers, one per townsperson, with folders and notes files (free). Tested: in 75 s of free time all 20 walkers stayed on paths, nobody stacked, teleported or clipped; 44 pairs chatted and wrote notes (worker notes land in their own `NOTES.md`); Work Hours seated all ten townspeople while every worker waited in its own yard; meetings still gather all ten townspeople in about 22 s; workers never went indoors; T next to a worker opens a chat with a friendly whinny and doesn't use your Claude allowance.
+
+## Final totals
+
+_To be filled in when the build is done._
