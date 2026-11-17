@@ -8,3 +8,7 @@ agents/**/NOTES.md
 
 # Things the village makes (websites, documents) stay on your computer
 workshop/
+
+# The Village Library: your reference files stay on your computer (only its README is shared)
+library/*
+!library/README.md

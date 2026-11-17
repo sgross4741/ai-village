@@ -63,6 +63,34 @@ Marshall is always looking for ways to make the team better. When a townsperson 
 - **Not hired:** they walk out of town.
 - Limits: one candidate at a time; at most 3 workers per townsperson (what a yard fits); a townsperson asks for help at most once a day. Finding a candidate is one Claude run.
 
+## Start the Day: a proactive town
+
+Press **Start the Day** (top left of the toolbar) when you sit down. Marshall runs a **morning huddle**: every townsperson looks at their area, their notes and what the town knows, and says what they need from you and what should happen next. Marshall merges it all (about 11 Claude runs in all).
+
+- **Questions** (toolbar, or press **Q**): what the town needs to know from you. Answer once and **everyone** knows: your answers are kept as **town facts** (`helper/marshall-home/town-facts.md`) that every townsperson and worker reads. Skip what doesn't matter.
+- **Proposed to-dos** appear on your to-do list as *Proposed*, with **Approve** (Marshall hands it out like any to-do) and **Decline**. Nothing happens without your Approve.
+- **Hallway talks:** on a day you've started, when two townspeople meet in town they really talk (one Claude run each), take notes, and may raise a question or propose a to-do. At most 10 a day (change it with the `VILLAGE_HALLWAY_LIMIT` setting). Before you press Start the Day, they only exchange simple notes, with no Claude runs.
+- Marshall passes on what one townsperson needs from another (it goes in their notes under "Open items").
+- Nothing here runs on its own: no button press, no huddle.
+
+## Tools (your tool matrix, Phase 1)
+
+| Who | Can use |
+|---|---|
+| Marshall (Chief of Staff) | Your Google Calendar, read-only, primary calendar only |
+| Clem (Prospecting) | Web search, and opening web pages to read (those runs get no private information) |
+| Augustus (Sales), Hattie (Client Success) | The Village Library; your calendar, read-only |
+| Jo (Delivery), Rufus (Marketing) | The Village Library (Rufus also: Gmail drafts with your button) |
+| Ezra (Product) | Web search; the Village Library |
+| Winona (Partnerships) | Web search; your calendar, read-only |
+| Beatrice (Legal) | Web search; opening official government pages only (.gov); the Village Library |
+| Silas (Operations) | A summary of the village's logs (runs today, recent activity, to-dos) |
+| Mortimer (Finance), all workers | Nothing yet |
+
+The tool gate checks every call: only those tools, only the primary calendar, no one else's free time, Legal only on .gov pages, and nobody who reads private information (the library or your calendar) can open web pages. Phase 2 and 3 (draft buttons for more people, Drive create, Gmail read, Higgsfield images, a daily brief) come later.
+
+**The Village Library** is the `library/` folder in the village (the **Village Library** button in the General Store opens it in Finder). Put your offers, prices, brand voice, templates and an "about my business" there as `.md`, `.txt` or `.csv` files. It stays on your computer.
+
 ## Town meetings
 
 During a meeting, a chat box opens on the left with everyone's picture and name. It starts on **Everyone**: talk to the whole room at once (one Claude run; the people with something useful to say answer, and Marshall can hand out work). Click one person to talk to just them. Drag the box's corner to resize it; **A+** / **A−** make the pictures and names bigger or smaller. Close it with ×, and reopen it with **Meeting Chat** in the toolbar.

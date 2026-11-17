@@ -378,6 +378,7 @@
   // "Done by Biscuit · checked by Clem", or "Done by Clem" when no worker was used
   const whoDid = (a) => `Done by ${a.doneBy || a.name}${a.checkedBy ? ` · checked by ${first(a.checkedBy)}` : ''}${tries(a)}`;
   function stateLine(t) {
+    if (t.status === 'proposed') return `Proposed by ${t.proposedBy}${t.via === 'hallway' ? ' (from a hallway talk)' : t.via === 'huddle' ? ' (morning huddle)' : ''}. Approve to hand it out, or decline.`;
     if (t.status === 'choosing') return 'Marshall is choosing who should do it…';
     if (t.status === 'needs someone') return `Nobody in town fits yet. Marshall: ${t.note || ''}`;
     if (t.status === 'problem') return `Problem: ${t.note || 'something went wrong'}`;
@@ -413,13 +414,27 @@
     todosShown = shown;
     todoList.innerHTML = '';
     for (const t of [...todos].reverse()) {          // newest first
+      if (t.status === 'declined') continue;
       const li = document.createElement('li');
-      li.className = t.status === 'done' ? 'done' : t.status === 'problem' ? 'problem' : '';
+      li.className = t.status === 'done' ? 'done' : t.status === 'problem' ? 'problem' : t.status === 'proposed' ? 'proposed' : '';
       const box = document.createElement('span'); box.className = 'box'; box.textContent = t.status === 'done' ? '☑' : '☐';
       const text = document.createElement('span'); text.className = 'text';
       const label = document.createElement('span'); label.textContent = t.text;
       const st = document.createElement('span'); st.className = 'state'; st.textContent = stateLine(t);
       text.append(label, st);
+      if (t.status === 'proposed') {
+        const row = document.createElement('span'); row.className = 'state';
+        for (const [lab, yes] of [['Approve', true], ['Decline', false]]) {
+          const b = document.createElement('button'); b.className = 'btn gmail' + (yes ? ' primary' : ''); b.textContent = lab; b.style.marginRight = '6px';
+          b.addEventListener('click', async (e) => {
+            e.stopPropagation(); b.disabled = true;
+            try { await fetch(HELPER + '/todos/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: t.id, approve: yes }) }); } catch { /* */ }
+            pollTodos(); pollNotices();
+          });
+          row.append(b);
+        }
+        text.append(row);
+      }
       for (const a of t.assignments) {
         if (a.workshop) { const row = document.createElement('span'); row.className = 'state'; row.append(...workshopButtons(a.workshop.id)); text.append(row); }
         if (!a.draftId) continue;
@@ -436,8 +451,9 @@
       todoList.appendChild(li);
     }
     todoEmpty.style.display = todos.length ? 'none' : 'block';
-    const open = todos.filter(t => t.status !== 'done').length;
-    todoBtn.textContent = open ? `To-Do (${open})` : 'To-Do';
+    const open = todos.filter(t => t.status !== 'done' && t.status !== 'declined' && t.status !== 'proposed').length;
+    const proposed = todos.filter(t => t.status === 'proposed').length;
+    todoBtn.textContent = open || proposed ? `To-Do (${[open ? open : '', proposed ? `${proposed} proposed` : ''].filter(Boolean).join(' · ')})` : 'To-Do';
   }
   function placeTip(e) {
     const w = todoTip.offsetWidth, h = todoTip.offsetHeight;
@@ -489,10 +505,11 @@
       return;
     }
     if (e.code === 'KeyT') { e.preventDefault(); talkToNearest(); return; }
+    if (e.code === 'KeyQ') { e.preventDefault(); toggleQuestions(); return; }
     if (e.code === 'KeyG') { e.preventDefault(); storeEl.classList.contains('hidden') ? openStore() : closeStore(); return; }
     if (e.code === 'KeyM') { e.preventDefault(); openChat('marshall'); return; }
     if (e.code === 'KeyL') { toggleLog(); return; }
-    if (e.key === 'Escape') { if (!storeEl.classList.contains('hidden')) closeStore(); else if (!noticesEl.classList.contains('hidden')) closeNotices(); else if (!todoEl.classList.contains('hidden')) closeTodo(); else closeChat(); return; }
+    if (e.key === 'Escape') { if (!questionsEl.classList.contains('hidden')) closeQuestions(); else if (!storeEl.classList.contains('hidden')) closeStore(); else if (!noticesEl.classList.contains('hidden')) closeNotices(); else if (!todoEl.classList.contains('hidden')) closeTodo(); else closeChat(); return; }
     if (e.code === 'KeyN') { toggleNotices(); return; }
     if (KEYMAP[e.code]) { state.keys[KEYMAP[e.code]] = true; e.preventDefault(); return; }
     if (e.key === '+' || e.key === '=') zoomStep(1);
@@ -672,6 +689,15 @@
   function recordChat(a, b) {
     talked.pairs.push(pairKey(a, b));
     store.set('aiv-talked', talked);
+    const townsfolkPair = [a, b].every(q => !q.isWorker && !q.isCandidate);
+    if (townsfolkPair && dayStarted) {
+      fetch(HELPER + '/hallway', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: a.key, b: b.key }) })
+        .then(r => r.json()).then(j => { if (!j.real) simpleNotes(a, b); }).catch(() => simpleNotes(a, b));
+      return;
+    }
+    simpleNotes(a, b);
+  }
+  function simpleNotes(a, b) {
     const said = (who) => who.tasks.length ? who.tasks.join('; ') : 'nothing assigned yet';
     noteQueue.push({ agent: a.key, text: `Talked with ${b.name} (${b.area}). Asked what they're working on: ${said(b)}.` });
     noteQueue.push({ agent: b.key, text: `Talked with ${a.name} (${a.area}). Asked what they're working on: ${said(a)}.` });
@@ -763,7 +789,7 @@
   // Click a notice to go to it. (Mac notifications come from the helper.)
   const noticesEl = $('notices'), noticeList = $('notice-list'), noticeEmpty = $('notice-empty'), toastEl = $('toast'), macBtn = $('mac-toggle');
   let notices = [], lastNoticeId = null, macOn = true, toastTimer = 0;
-  const NOTICE_LABEL = { workshop: 'Ready to preview', candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
+  const NOTICE_LABEL = { questions: 'Questions', proposals: 'Proposed to-dos', workshop: 'Ready to preview', candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
   function openNotices() { noticesEl.classList.remove('hidden'); toastEl.style.display = 'none'; pollNotices(); }
   function closeNotices() { noticesEl.classList.add('hidden'); }
   function toggleNotices() { noticesEl.classList.contains('hidden') ? openNotices() : closeNotices(); }
@@ -783,6 +809,7 @@
       state.player.auto = { scene: hallRoom, tile: freeInHall(...t) ? t : nearestFree(t, new Set()), face: 'up' };
       return;
     }
+    if (ref.questions) { openQuestions(); return; }
     if (ref.workshop) { openStore(ref.workshop); fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {}); return; }
     if (ref.todo) openTodo(); else if (ref.log) { if (logEl.classList.contains('hidden')) toggleLog(); } else openChat('marshall');
     fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {});
@@ -849,6 +876,7 @@
   }
   function closeStore() { storeEl.classList.add('hidden'); }
   $('store-close').addEventListener('click', closeStore);
+  $('store-library').addEventListener('click', () => fetch(HELPER + '/library-reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
   storeSearch.addEventListener('input', renderStore);
   for (const b of document.querySelectorAll('#store-filters button')) b.addEventListener('click', () => { storeFilter = b.dataset.kind; renderStore(); });
   function renderStore() {
@@ -969,6 +997,83 @@
     } catch (err) { meetSay(thread, { text: err instanceof TypeError ? "The village helper isn't running." : err.message, cls: 'problem' }); }
     meetBusy = false; renderMeetLines();
   });
+
+  // ---------- a proactive town: Start the Day, questions ----------
+  // "Start the Day" runs the morning huddle (about 11 Claude runs): everyone says what they need
+  // from you and what should happen next. Only on a started day do townspeople who meet in
+  // town have real conversations (a limited number a day). Questions wait in the Questions panel;
+  // your answers become town facts everyone knows.
+  let dayStarted = false, huddleState = 'not started';
+  const dayBtn = document.createElement('button');
+  dayBtn.textContent = 'Start the Day'; dayBtn.style.cssText = btnCss + ';background:#4f7a2c';
+  dayBtn.title = 'Morning huddle: everyone says what they need from you and what should happen next (about 11 Claude runs)';
+  dayBtn.addEventListener('click', async () => {
+    dayBtn.blur();
+    if (huddleState === 'running') return;
+    if (huddleState === 'done' && !confirm('Today\'s huddle is done. Run another one? (about 11 Claude runs)')) return;
+    try {
+      const r = await fetch(HELPER + '/huddle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!r.ok) throw new Error((await r.json()).error);
+      huddleState = 'running'; dayStarted = true; renderDay();
+    } catch (err) { alert(err instanceof TypeError ? "The village helper isn't running." : err.message); }
+  });
+  const questionsBtn = document.createElement('button');
+  questionsBtn.textContent = 'Questions'; questionsBtn.title = 'What the town needs to know from you (shortcut: Q)'; questionsBtn.style.cssText = btnCss;
+  questionsBtn.addEventListener('click', () => { toggleQuestions(); questionsBtn.blur(); });
+  menuEl.insertBefore(dayBtn, menuEl.firstChild);
+  menuEl.insertBefore(questionsBtn, todoBtn);
+  function renderDay() {
+    dayBtn.textContent = huddleState === 'running' ? 'Huddle running…' : huddleState === 'done' ? 'Day started' : 'Start the Day';
+    dayBtn.style.background = huddleState === 'not started' || huddleState === 'problem' ? '#4f7a2c' : '#7e4f2c';
+  }
+  async function pollDay() {
+    try {
+      const j = await (await fetch(HELPER + '/day')).json();
+      dayStarted = !!j.started; huddleState = j.running ? 'running' : (j.huddle || 'not started');
+      questionsBtn.textContent = j.questions ? `Questions (${j.questions})` : 'Questions';
+      questionsBtn.style.background = j.questions ? '#b5652a' : '#7e4f2c';
+      renderDay();
+    } catch { /* helper not running */ }
+  }
+  setInterval(pollDay, 3000);
+  pollDay();
+
+  const questionsEl = $('questions'), questionList = $('question-list'), questionEmpty = $('question-empty');
+  function openQuestions() { questionsEl.classList.remove('hidden'); state.keys = {}; renderQuestions(); }
+  function closeQuestions() { questionsEl.classList.add('hidden'); }
+  function toggleQuestions() { questionsEl.classList.contains('hidden') ? openQuestions() : closeQuestions(); }
+  $('questions-close').addEventListener('click', closeQuestions);
+  async function renderQuestions() {
+    let qs = [];
+    try { qs = (await (await fetch(HELPER + '/questions')).json()).questions || []; } catch { /* */ }
+    const open = qs.filter(q => q.status === 'open');
+    questionList.innerHTML = '';
+    for (const q of open) {
+      const li = el('li');
+      const a = people.find(p => p.key === q.from) || (q.from === 'marshall' ? { sheet: marshallSheet } : null);
+      const head = el('div', 'qhead');
+      if (a && a.sheet) head.append(portrait(a.sheet));
+      head.append(el('span', 'who', q.fromName), el('span', 'via', q.via === 'hallway' ? 'hallway talk' : 'morning huddle'));
+      const ta = el('textarea'); ta.rows = 2; ta.placeholder = 'Your answer (everyone in town will know it)…';
+      const row = el('div', 'qacts');
+      const ans = el('button', 'btn primary', 'Answer'), skip = el('button', 'btn', 'Skip');
+      const go = async (body) => {
+        ans.disabled = skip.disabled = true;
+        try { const r = await fetch(HELPER + '/questions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: q.id, ...body }) }); if (!r.ok) throw new Error((await r.json()).error); }
+        catch (err) { alert(err.message); ans.disabled = skip.disabled = false; return; }
+        renderQuestions(); pollDay(); pollNotices();
+      };
+      ans.addEventListener('click', () => go({ answer: ta.value }));
+      skip.addEventListener('click', () => go({ skip: true }));
+      ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) go({ answer: ta.value }); });
+      row.append(ans, skip);
+      li.append(head, el('p', 'qtext', q.text), ta, row);
+      questionList.append(li);
+    }
+    const answered = qs.filter(q => q.status === 'answered').length;
+    questionEmpty.textContent = open.length ? '' : answered ? `All caught up. ${answered} answered so far; everyone in town knows the answers.` : 'No questions yet. Press "Start the Day" and the town will tell you what it needs to know.';
+    questionEmpty.style.display = open.length ? 'none' : 'block';
+  }
 
   // ---------- each frame ----------
   function update(dt) {
