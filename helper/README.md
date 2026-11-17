@@ -29,11 +29,13 @@ Updates come from GitHub. Open a terminal in the `ai-village` folder and run:
 git pull
 ```
 
-Then restart the helper (Ctrl+C, then start it again). Your notes files and Marshall's memory (`helper/marshall-home/`) are never touched by an update.
+If you installed the login helper, it restarts itself with the new code. Otherwise restart the helper (Ctrl+C, then start it again). Your notes files and Marshall's memory (`helper/marshall-home/`) are never touched by an update.
 
 ## Every time you play
 
-On a Mac, the easy way: double-click **`mac/Start Village.command`**. It starts the helper and opens the village. Keep its Terminal window open while you play; close it to stop. (Moving from an older village folder? Double-click **`mac/Copy Old Notes.command`** once to bring everyone's memories across.)
+On a Mac, the easiest way: double-click **`mac/Install Village Helper.command`** once. From then on the helper starts by itself, quietly in the background, every time you log in, and you just open `index.html` to play. It uses no Claude allowance while idle. What everyone is doing is written to `~/Library/Logs/ai-village-helper.log`. After a `git pull`, it restarts itself to use new helper code as soon as nobody is in the middle of a task. If you move or rename the village folder, double-click the Install file again. To remove it, double-click **`mac/Uninstall Village Helper.command`**.
+
+Or, without the login helper: double-click **`mac/Start Village.command`**. It starts the helper and opens the village. Keep its Terminal window open while you play; close it to stop. (Moving from an older village folder? Double-click **`mac/Copy Old Notes.command`** once to bring everyone's memories across.)
 
 Or by hand:
 

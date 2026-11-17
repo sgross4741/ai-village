@@ -612,7 +612,19 @@ if (process.argv.includes('--check')) {
     process.exit(1);
   });
   server.listen(PORT, '127.0.0.1', () => {
-    console.log(`The village helper is running on this computer (127.0.0.1:${PORT}), using ${MODEL} through your Claude subscription.`);
+    console.log(`${new Date().toISOString()} The village helper is running on this computer (127.0.0.1:${PORT}), using ${MODEL} through your Claude subscription.`);
     console.log('Open index.html. Press M to talk to Marshall, or walk up to anyone and press T. Press Ctrl+C here to stop.');
   });
+  // Started at login (mac/Install Village Helper.command)? Then after a `git pull` brings
+  // new helper code, restart to use it: wait until nobody is mid-task, then exit, and
+  // the Mac starts the helper again straight away.
+  if (process.env.VILLAGE_LOGIN_ITEM === '1') {
+    const started = fs.statSync(__filename).mtimeMs;
+    setInterval(() => {
+      let now; try { now = fs.statSync(__filename).mtimeMs; } catch { return; }
+      if (now === started || running || queue.length || working.size || pending.length || busyAgents.size) return;
+      console.log(`${new Date().toISOString()} New helper code found: restarting to use it.`);
+      process.exit(75);
+    }, 5000);
+  }
 }
