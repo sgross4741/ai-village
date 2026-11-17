@@ -21,6 +21,16 @@ node helper/marshall-helper.js --check
 
 It should print your Node.js version, your Claude Code version, the model (`claude-opus-5-5`) and the ten townspeople it found.
 
+## Getting updates
+
+Updates come from GitHub. Open a terminal in the `ai-village` folder and run:
+
+```bash
+git pull
+```
+
+Then restart the helper (Ctrl+C, then start it again). Your notes files and Marshall's memory (`helper/marshall-home/`) are never touched by an update.
+
 ## Every time you play
 
 1. Open a terminal in the `ai-village` folder and start the helper:
@@ -47,7 +57,7 @@ Everything stays in `helper/marshall-home/` on your computer:
 - `runs-log.csv`: one line per Claude Code run (who, time taken, tokens), for the build log. The cost column is Claude Code's own estimate of what the same work would cost on the API. On your subscription, nothing is billed per use.
 - `sessions.json`: conversation ids, so everyone remembers earlier chats. Delete it to give everyone a fresh start.
 
-Each townsperson's memory is their own `agents/<name>/NOTES.md`. They add what they learn under "What I've learned", and chats with neighbors under "Conversations".
+Each townsperson's memory is their own `agents/<name>/NOTES.md`. These notes files stay on your computer: they aren't saved to GitHub, so updating with `git pull` never touches them. If one is missing, the helper starts a fresh one. They add what they learn under "What I've learned", and chats with neighbors under "Conversations".
 
 Workers (the horses) keep notes too, in `agents/<townsperson>/workers/<worker>/NOTES.md`. They have no brain yet, so chatting with one uses none of your Claude allowance.
 

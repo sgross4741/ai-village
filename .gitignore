@@ -2,3 +2,6 @@
 helper/marshall-home/
 .DS_Store
 *.zip
+
+# Everyone's notes (their memory) stay on your computer too
+agents/**/NOTES.md

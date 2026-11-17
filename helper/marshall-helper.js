@@ -218,9 +218,25 @@ function addLog(from, to, text, kind) {
 }
 
 // ---------- notes ----------
+// Everyone's notes files are their memory. They live only on your computer (they're
+// not saved to GitHub), so anyone who doesn't have one yet gets a fresh one here.
+function ensureNotes() {
+  const fresh = (title, about, sections) => `# ${title}'s notes\n\n${about} I read this before every task and add to it after.\nKeep each entry short, dated (YYYY-MM-DD) and newest first.\n` +
+    sections.map(h => `\n## ${h}\n_Nothing yet._\n`).join('');
+  for (const t of townspeople()) {
+    const file = path.join(AGENTS, t.key, 'NOTES.md');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, fresh(t.name, `What I learn while working on **${t.area}** for the Sheriff.`, ["What I've learned", 'People and contacts', 'Open items', 'Conversations']));
+  }
+  for (const w of workers()) {
+    const file = path.join(w.dir, 'NOTES.md'), boss = townspeople().find(t => t.key === w.owner);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, fresh(w.name, `What I learn while helping ${boss.name} with **${boss.area}**.`, ["What I've learned", 'Conversations']));
+  }
+}
+
 // a townsperson's notes (agents/<key>/NOTES.md) or a worker's (agents/<townsperson>/workers/<key>/NOTES.md)
 function notesFileFor(key) {
   if (!/^[a-z]{2,20}$/.test(key)) return null;
+  ensureNotes();
   const own = path.join(AGENTS, key, 'NOTES.md');
   if (fs.existsSync(own)) return own;
   for (const tp of fs.existsSync(AGENTS) ? fs.readdirSync(AGENTS) : []) {
@@ -587,6 +603,7 @@ async function check() {
   console.log('Looks ready. Start the helper with:  node helper/marshall-helper.js');
 }
 
+ensureNotes();
 if (process.argv.includes('--check')) {
   check();
 } else {
