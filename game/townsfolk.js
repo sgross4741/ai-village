@@ -41,6 +41,9 @@ const WORKERS = [
   { key: 'tumbleweed', name: 'Tumbleweed', owner: 'silas' },
 ];
 
+// Making something real (a website, document, spreadsheet...) is done at a workbench in the General Store.
+const MAKER = /\b(website|web ?page|landing page|site|pdf|document|report|one-pager|spreadsheet|csv|flyer|brochure|deck|slides|newsletter|menu|poster|files?)s?\b/i;
+
 const STROLL_SPEED = 34;   // wandering, world pixels per second
 const HURRY_SPEED = 52;    // going to work or to a meeting
 const NOTICE_SHERIFF = 30; // stop and look when the Sheriff is this close
@@ -101,7 +104,7 @@ function createNav(town, getInterior) {
       if (y === scene.h - 1 && x !== doorCol) return false;          // the bottom wall: only the door is open
       if (scene.solidAt(x, y)) {
         const seat = (t) => t && t[0] === x && t[1] === y;
-        return !!isTarget && !!who && (seat(who.sitTile) || seat(who.meetSeat));   // sitting at your desk or meeting seat
+        return !!isTarget && !!who && (seat(who.sitTile) || seat(who.meetSeat) || seat(who.storeSeat));   // sitting at your desk or meeting seat
       }
       return true;
     };
@@ -354,6 +357,23 @@ function updateTownsperson(p, i, dt, ctx, everyone) {
     if (p.seated) { p.seated = false; }
   }
   if (p.leaveDelay > 0) { p.leaveDelay -= dt; p.moving = false; return; }
+
+  // Making something? Work at a General Store workbench (if one is free), not at home.
+  const wantsStore = !!ctx.store && mode !== 'meeting' && p.tasks.length > 0 && p.tasks.some(t => MAKER.test(t));
+  if (p.storeSeat && !wantsStore) {                          // done (or called to a meeting): free the workbench and go
+    ctx.store.release(p); p.leftStoreSeat = p.storeSeat; p.storeSeat = null;
+    p.seated = false; p.goal = null; p.path = [];
+  }
+  if (wantsStore && !p.storeSeat) {
+    const seat = ctx.store.claim(p);
+    if (seat) { p.storeSeat = seat; p.seated = false; p.goal = null; p.path = []; }
+  }
+  if (p.storeSeat) {
+    p.goal = { scene: ctx.store.room, tile: p.storeSeat };
+    if (p.seated) { p.moving = false; p.dir = 'up'; return; }
+    if (walk(p, dt, nav, occ, HURRY_SPEED) === 'arrived') { p.seated = true; p.dir = 'up'; p.moving = false; }
+    return;
+  }
   if (mode === 'meeting') {
     if (!p.meetSeat && p.scene === ctx.meeting.room) p.meetSeat = ctx.meeting.claim(p);   // pick a seat on arrival
     p.goal = { scene: ctx.meeting.room, tile: p.meetSeat || ctx.meeting.anySeat };

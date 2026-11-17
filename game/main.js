@@ -271,6 +271,7 @@
       const d = Math.hypot(q.x - me.x, q.y - me.y);
       if (d < best) { best = d; near = q; }
     }
+    if (!near && state.scene === storeRoom) { openStore(); return; }
     openChat(near || 'marshall');
   }
   $('chat-close').addEventListener('click', closeChat);
@@ -484,7 +485,8 @@
     if (e.code === 'KeyT') { e.preventDefault(); talkToNearest(); return; }
     if (e.code === 'KeyM') { e.preventDefault(); openChat('marshall'); return; }
     if (e.code === 'KeyL') { toggleLog(); return; }
-    if (e.key === 'Escape') { if (!noticesEl.classList.contains('hidden')) closeNotices(); else if (!todoEl.classList.contains('hidden')) closeTodo(); else closeChat(); return; }
+    if (document.activeElement === $('store-search') || document.activeElement === $('meet-input')) { if (e.key === 'Escape') { closeStore(); document.activeElement.blur(); } return; }
+    if (e.key === 'Escape') { if (!storeEl.classList.contains('hidden')) closeStore(); else if (!noticesEl.classList.contains('hidden')) closeNotices(); else if (!todoEl.classList.contains('hidden')) closeTodo(); else closeChat(); return; }
     if (e.code === 'KeyN') { toggleNotices(); return; }
     if (KEYMAP[e.code]) { state.keys[KEYMAP[e.code]] = true; e.preventDefault(); return; }
     if (e.key === '+' || e.key === '=') zoomStep(1);
@@ -556,7 +558,7 @@
   const menuEl = document.createElement('div');
   menuEl.className = 'panel';
   menuEl.style.cssText = 'top:12px;left:50%;transform:translateX(-50%);padding:6px;display:flex;gap:6px';
-  const btnCss = 'font:inherit;color:#f1e6c8;background:#7e4f2c;border:2px solid #2e1d14;padding:4px 12px;cursor:pointer';
+  const btnCss = 'font:inherit;color:#f1e6c8;background:#7e4f2c;border:2px solid #2e1d14;padding:4px 10px;cursor:pointer;white-space:nowrap';
   const meetBtn = document.createElement('button');
   meetBtn.textContent = 'Call Meeting';
   meetBtn.style.cssText = btnCss;
@@ -635,6 +637,7 @@
     state.player.auto = { scene: hallRoom, tile: meetingSpots.sheriffSpot, face: 'down' };
     Object.assign(deputy, { goal: { scene: hallRoom, tile: meetingSpots.deputySpot }, path: [], after: null, following: false });
     meetBtn.textContent = 'End Meeting';
+    openMeetingChat();
   }
   function endMeeting() {
     if (!state.meeting) return;
@@ -642,6 +645,7 @@
     state.player.auto = { scene: town, tile: hallFront, face: 'down' };
     Object.assign(deputy, { goal: { scene: town, tile: [hallFront[0] - 1, hallFront[1]] }, path: [], after: 'follow', following: false });
     meetBtn.textContent = 'Call Meeting';
+    closeMeetingChat();
   }
 
   // ---------- chats between townspeople, and their notes ----------
@@ -773,7 +777,7 @@
       state.player.auto = { scene: hallRoom, tile: freeInHall(...t) ? t : nearestFree(t, new Set()), face: 'up' };
       return;
     }
-    if (ref.workshop) previewWorkshop(ref.workshop);
+    if (ref.workshop) { openStore(ref.workshop); fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {}); return; }
     if (ref.todo) openTodo(); else if (ref.log) { if (logEl.classList.contains('hidden')) toggleLog(); } else openChat('marshall');
     fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {});
   }
@@ -816,6 +820,150 @@
   setInterval(pollNotices, 3000);
   pollNotices();
 
+  // ---------- the General Store (the Workshop) ----------
+  // Four workbenches where people making things sit, and a store panel listing everything made:
+  // walk in and press T (at the counter or anywhere with nobody next to you).
+  const storeRoom = getInterior(town.buildings.find(b => b.id === 'store'));
+  const storeSeats = new Map();
+  const storeCtx = {
+    room: storeRoom,
+    claim(p) { for (const t of storeRoom.workbenches) { const k = t.join(','); if (!storeSeats.has(k)) { storeSeats.set(k, p); return t; } } return null; },
+    release(p) { for (const [k, q] of storeSeats) if (q === p) storeSeats.delete(k); },
+  };
+  const storeEl = $('store'), storeList = $('store-list'), storeDetail = $('store-detail'), storeSearch = $('store-search');
+  let storeFilter = 'all', storeSelected = null;
+  const KIND_LABEL = { website: 'Website', document: 'Document', spreadsheet: 'Spreadsheet', other: 'Files' };
+  const kindOf = (it) => it.kind || (it.website ? 'website' : 'other');
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+  async function openStore(id) {
+    storeEl.classList.remove('hidden'); state.keys = {};
+    await pollWorkshop();
+    if (id) storeSelected = id;
+    renderStore();
+  }
+  function closeStore() { storeEl.classList.add('hidden'); }
+  $('store-close').addEventListener('click', closeStore);
+  storeSearch.addEventListener('input', renderStore);
+  for (const b of document.querySelectorAll('#store-filters button')) b.addEventListener('click', () => { storeFilter = b.dataset.kind; renderStore(); });
+  function renderStore() {
+    for (const b of document.querySelectorAll('#store-filters button')) b.classList.toggle('on', b.dataset.kind === storeFilter);
+    const q = storeSearch.value.trim().toLowerCase();
+    const items = Object.values(workshopItems).sort((a, b) => b.created.localeCompare(a.created))
+      .filter(it => storeFilter === 'all' || kindOf(it) === storeFilter)
+      .filter(it => !q || (it.task + ' ' + it.files.join(' ') + ' ' + it.doneBy).toLowerCase().includes(q));
+    storeList.innerHTML = '';
+    if (!items.length) storeList.append(el('li', 'empty', Object.keys(workshopItems).length ? 'Nothing matches.' : 'Nothing made yet. Ask for a website, a document or a spreadsheet, and it will be here.'));
+    if (!items.some(it => it.id === storeSelected)) storeSelected = items.length ? items[0].id : null;
+    for (const it of items) {
+      const li = el('li', it.id === storeSelected ? 'on' : '');
+      li.append(el('span', 'kind ' + kindOf(it), KIND_LABEL[kindOf(it)]), el('span', 'name', it.task), el('span', 'meta', `${it.doneBy}${it.published ? ' · live' : ''}`));
+      li.addEventListener('click', () => { storeSelected = it.id; renderStore(); });
+      storeList.append(li);
+    }
+    storeDetail.innerHTML = '';
+    const it = workshopItems[storeSelected];
+    if (!it) return;
+    storeDetail.append(el('h3', '', it.task));
+    storeDetail.append(el('p', 'meta', `${KIND_LABEL[kindOf(it)]} · made by ${it.doneBy}${it.checkedBy ? `, checked by ${it.checkedBy.split(' ')[0]}` : ''} · ${new Date(it.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
+    const acts = el('div', 'actions');
+    const act = (label, title, fn, primary) => { const b = el('button', 'btn' + (primary ? ' primary' : ''), label); b.title = title; b.addEventListener('click', fn); acts.append(b); return b; };
+    act('Preview', 'Open it in a new tab', () => previewWorkshop(it.id), true);
+    if (kindOf(it) === 'document') act('Save as PDF', 'Opens the print window: choose "Save as PDF"', () => window.open(`${HELPER}/workshop/${it.id}/${encodeURIComponent(it.files.find(f => f.endsWith('.html')))}?print=1`, '_blank', 'noopener'));
+    act('Download all', 'Every file, in one .zip', () => { location.href = `${HELPER}/workshop/${it.id}.zip`; });
+    if (kindOf(it) === 'website') for (const b of workshopButtons(it.id).slice(1)) acts.append(b);
+    act('Show in Finder', 'Open its folder on your Mac', () => fetch(HELPER + '/workshop-reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: it.id }) }));
+    storeDetail.append(acts);
+    storeDetail.append(el('h4', '', 'Files'));
+    const ul = el('ul', 'files');
+    for (const f of it.files) {
+      const li = el('li');
+      const a = el('a', '', f); a.href = `${HELPER}/workshop/${it.id}/${encodeURIComponent(f)}`; a.target = '_blank'; a.rel = 'noopener'; a.title = 'Open';
+      const dl = el('a', 'dl', 'Download'); dl.href = `${HELPER}/workshop/${it.id}/${encodeURIComponent(f)}?download=1`;
+      li.append(a, dl); ul.append(li);
+    }
+    storeDetail.append(ul);
+  }
+
+  // ---------- the meeting chat (left side, during a meeting) ----------
+  // Everyone in the room with their picture. "Everyone" talks to the whole room at once
+  // (one Claude run: whoever has something useful answers); pick one person to talk just to them.
+  const meetEl = $('meeting'), meetPeople = $('meet-people'), meetLines = $('meet-lines'), meetInput = $('meet-input'), meetStatus = $('meet-status');
+  let meetWith = 'room', meetSize = 40, meetBusy = false;
+  try { meetSize = Number(localStorage.getItem('aiv-meet-size')) || 40; } catch { /* */ }
+  const meetChatBtn = document.createElement('button');
+  meetChatBtn.textContent = 'Meeting Chat'; meetChatBtn.style.cssText = btnCss + ';display:none';
+  meetChatBtn.addEventListener('click', () => { meetEl.classList.contains('hidden') ? openMeetingChat() : closeMeetingChat(true); meetChatBtn.blur(); });
+  menuEl.insertBefore(meetChatBtn, workBtn);
+  const portraits = new Map();
+  function portrait(sheet) {
+    const c = document.createElement('canvas');
+    const w = sheet.frameW, h = Math.round(sheet.frameH * 0.55);
+    c.width = w; c.height = h; c.className = 'pic';
+    const draw = () => { const g = c.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(sheet.img, sheet.frameW, 0, w, h, 0, 0, w, h); };
+    if (sheet.ready) draw(); else sheet.img.addEventListener('load', draw);
+    return c;
+  }
+  const attendees = () => [{ key: 'room', name: 'Everyone', area: 'The whole room' }, { key: 'marshall', name: 'Marshall', area: 'Deputy', sheet: marshallSheet }, ...people.filter(q => !q.isWorker && !q.isCandidate)];
+  const whoByKey = (k) => attendees().find(a => (a.key || a) === k);
+  function picFor(a) { if (a.key === 'room') { const d = el('span', 'pic all', '★'); return d; } return portrait(a.sheet); }
+  function applyMeetSize() { meetEl.style.setProperty('--pic', meetSize + 'px'); try { localStorage.setItem('aiv-meet-size', String(meetSize)); } catch { /* */ } }
+  $('meet-bigger').addEventListener('click', () => { meetSize = Math.min(96, meetSize + 8); applyMeetSize(); });
+  $('meet-smaller').addEventListener('click', () => { meetSize = Math.max(24, meetSize - 8); applyMeetSize(); });
+  $('meet-close').addEventListener('click', () => closeMeetingChat(true));
+  function openMeetingChat() {
+    meetEl.classList.remove('hidden'); logEl.classList.add('hidden'); meetChatBtn.style.display = state.meeting ? '' : 'none';
+    applyMeetSize(); renderMeetPeople(); renderMeetLines();
+  }
+  function closeMeetingChat(byHand) { meetEl.classList.add('hidden'); meetInput.blur(); meetChatBtn.style.display = state.meeting && byHand ? '' : 'none'; }
+  function renderMeetPeople() {
+    meetPeople.innerHTML = '';
+    for (const a of attendees()) {
+      const li = el('li', a.key === meetWith ? 'on' : '');
+      li.append(picFor(a), el('span', 'nm', a.name.split(' ')[0]));
+      li.title = `${a.name} · ${a.area || ''}`;
+      li.addEventListener('click', () => { meetWith = a.key; renderMeetPeople(); renderMeetLines(); meetInput.focus(); });
+      meetPeople.append(li);
+    }
+    const a = whoByKey(meetWith);
+    meetInput.placeholder = meetWith === 'room' ? 'Say something to everyone…' : `Say something to ${a.name.split(' ')[0]}…`;
+  }
+  function renderMeetLines() {
+    meetLines.innerHTML = '';
+    for (const l of transcripts.get(meetWith === 'room' ? 'room' : meetWith) || []) addMeetLine(l);
+    meetStatus.textContent = meetBusy ? `${meetWith === 'room' ? 'The room is' : whoByKey(meetWith).name.split(' ')[0] + ' is'} thinking…` : '';
+  }
+  function addMeetLine(l) {
+    const p = el('p', l.cls || '');
+    const a = l.key && whoByKey(l.key);
+    if (a && l.key !== 'room') p.append(picFor(a));
+    if (l.who) p.append(el('span', 'who', l.who + ': '));
+    p.append(document.createTextNode(l.text));
+    meetLines.append(p); meetLines.scrollTop = meetLines.scrollHeight;
+  }
+  function meetSay(threadKey, line) {
+    if (!transcripts.has(threadKey)) transcripts.set(threadKey, []);
+    transcripts.get(threadKey).push(line);
+    if (meetWith === threadKey && !meetEl.classList.contains('hidden')) addMeetLine(line);
+  }
+  $('meet-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = meetInput.value.trim();
+    if (!text || meetBusy) return;
+    const thread = meetWith;
+    meetInput.value = '';
+    meetSay(thread, { who: 'Sheriff', text });
+    meetBusy = true; renderMeetLines();
+    try {
+      const r = await fetch(HELPER + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: thread, text }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Something went wrong.');
+      if (thread === 'room') for (const l of j.lines || []) meetSay('room', { key: l.key, who: l.name, text: l.text });
+      else meetSay(thread, { key: thread, who: whoByKey(thread).name, text: j.reply });
+      if (j.delegated && j.delegated.length) meetSay(thread, { text: `Handed to ${j.delegated.map(d => d.name).join(', ')}. Follow along in the chat log (L).`, cls: 'note' });
+    } catch (err) { meetSay(thread, { text: err instanceof TypeError ? "The village helper isn't running." : err.message, cls: 'problem' }); }
+    meetBusy = false; renderMeetLines();
+  });
+
   // ---------- each frame ----------
   function update(dt) {
     state.player.scene = state.scene;
@@ -832,7 +980,7 @@
       nav, occ, sheriff: state.player, meeting: state.meeting, workTime: state.workTime,
       sheriffWalking: state.player.sinceMoved < 0.8,
       chattingWith: chatWith && chatWith !== 'marshall' && !chatEl.classList.contains('hidden') ? chatWith : null,
-      talkedToday, recordChat,
+      talkedToday, recordChat, store: storeCtx,
     };
     people.forEach((person, i) => updateTownsperson(person, i, dt, lifeCtx, people));
     for (let i = people.length - 1; i >= 0; i--) if (people[i].gone) {     // a candidate who walked out of town

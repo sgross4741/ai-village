@@ -314,6 +314,101 @@ function paintHall() {
 }
 
 // Fountain with a stone basin: footprint 4x3 (64x48) plus 8px above.
+// The General Store (the Workshop): a frontier storefront with a tall false front,
+// a striped porch awning, big display windows full of goods, and a picture sign (no text).
+function paintStore() {
+  const W = 112, H = 76;
+  const { c, g } = makeCanvas(W, H);
+  const Wd = WALLS[2], trim = WALLS[3];
+  // false front: tall flat facade with a stepped top
+  box(g, 6, 4, W - 12, 72, Wd[3]);
+  box(g, 18, 0, W - 36, 6, Wd[3]);
+  rect(g, 19, 1, W - 38, 1, Wd[4]);
+  rect(g, 7, 5, W - 14, 1, Wd[4]);
+  for (let y = 9, row = 0; y < 74; y += 4, row++) {
+    rect(g, 7, y, W - 14, 1, Wd[2]);
+    for (let x = 14 + (row % 2) * 9; x < W - 8; x += 18) rect(g, x, y - 3, 1, 3, Wd[2]);
+  }
+  box(g, 6, 4, 4, 72, Wd[1]); box(g, W - 10, 4, 4, 72, Wd[1]);
+  // picture sign: a crate, a jar and a sack on a board (no words)
+  box(g, 28, 8, 56, 16, trim[1]);
+  rect(g, 30, 10, 52, 12, trim[3]);
+  rect(g, 30, 10, 52, 1, trim[4]);
+  box(g, 36, 13, 9, 8, PAL.wood[2]); rect(g, 37, 16, 7, 1, PAL.wood[0]); rect(g, 40, 14, 1, 6, PAL.wood[0]);   // crate
+  box(g, 51, 12, 8, 9, PAL.water[2]); rect(g, 51, 11, 8, 2, PAL.wood[1]); rect(g, 53, 14, 2, 4, PAL.water[3]); // jar
+  box(g, 66, 13, 10, 8, '#d8c79a'); rect(g, 69, 11, 4, 3, '#b9a87a'); rect(g, 67, 17, 8, 1, '#b9a87a');      // sack
+  // porch awning, red and cream stripes
+  box(g, 2, 30, W - 4, 9, PAL.out);
+  for (let x = 3, k = 0; x < W - 3; x += 6, k++) rect(g, x, 31, Math.min(6, W - 3 - x), 7, k % 2 ? PAL.cream : PAL.red);
+  for (let x = 3, k = 0; x < W - 3; x += 6, k++) rect(g, x, 37, Math.min(6, W - 3 - x), 1, k % 2 ? '#c9b496' : '#a3442c');
+  rect(g, 3, 38, W - 6, 2, 'rgba(46,29,20,0.35)');
+  box(g, 8, 39, 3, 37, PAL.wood[1]); box(g, W - 11, 39, 3, 37, PAL.wood[1]);   // porch posts
+  // big display windows with goods on shelves
+  for (const wx of [16, 66]) {
+    box(g, wx, 44, 30, 22, Wd[4]);
+    rect(g, wx + 2, 46, 26, 18, PAL.water[1]);
+    rect(g, wx + 2, 46, 8, 1, PAL.water[3]);
+    rect(g, wx + 2, 54, 26, 1, PAL.wood[1]); rect(g, wx + 2, 62, 26, 2, PAL.wood[1]);
+    const goods = ['#c7922e', '#a3401f', '#3f6f8f', '#56663a', '#e8b84a', '#6a3644', PAL.cream];
+    for (let i = 0; i < 6; i++) { const col = goods[(i * 3 + wx) % goods.length]; box(g, wx + 3 + i * 4, 49 + (i % 2), 3, 5 - (i % 2), col); }
+    for (let i = 0; i < 5; i++) { const col = goods[(i * 5 + wx + 1) % goods.length]; box(g, wx + 4 + i * 5, 57, 4, 5, col); }
+    rect(g, wx + 15, 46, 1, 18, Wd[4]);
+  }
+  paintDoor(g, 50, 55);
+  return c;
+}
+// shelves of goods: jars, tins, sacks and parcels (stand for the things made in the Workshop)
+function paintGoodsShelf(seed) {
+  const H = 34;
+  const { c, g } = makeCanvas(32, H);
+  const r = rng(seed);
+  box(g, 0, 0, 32, H, PAL.wood[1]);
+  rect(g, 1, 1, 30, 1, PAL.wood[3]);
+  const cols = ['#c7922e', '#a3401f', '#3f6f8f', '#56663a', '#e8b84a', '#6a3644', PAL.cream, '#73b6e0'];
+  for (let k = 0; k < 3; k++) {
+    const sy = 2 + k * 10;
+    rect(g, 2, sy, 28, 9, PAL.wood[0]);
+    let x = 3;
+    while (x < 27) {
+      const kind = Math.floor(r() * 4), col = cols[Math.floor(r() * cols.length)];
+      if (kind === 0) { box(g, x, sy + 3, 4, 6, col); rect(g, x, sy + 2, 4, 1, PAL.wood[3]); x += 5; }        // jar
+      else if (kind === 1) { box(g, x, sy + 5, 5, 4, col); rect(g, x + 1, sy + 6, 3, 1, PAL.cream); x += 6; } // tin
+      else if (kind === 2) { box(g, x, sy + 4, 5, 5, '#d8c79a'); px(g, x + 2, sy + 3, '#b9a87a'); x += 6; }   // sack
+      else { box(g, x, sy + 4, 6, 5, PAL.cream); rect(g, x + 2, sy + 4, 1, 5, PAL.red); x += 7; }             // parcel
+    }
+    rect(g, 1, sy + 9, 30, 1, PAL.wood[3]);
+  }
+  return c;
+}
+// the shop counter, with a brass cash register and a ledger
+function paintCounter(wT) {
+  const W = wT * 16, H = 26;
+  const { c, g } = makeCanvas(W, H);
+  box(g, 0, 6, W, H - 6, PAL.wood[2]);
+  rect(g, 1, 7, W - 2, 2, PAL.wood[4]);
+  for (let x = 6; x < W - 2; x += 10) box(g, x, 12, 7, 10, PAL.wood[1]);
+  box(g, W - 18, 0, 13, 10, PAL.gold); rect(g, W - 16, 2, 9, 3, '#fff0b8'); rect(g, W - 17, 7, 11, 1, '#a3721f');
+  box(g, 6, 3, 12, 6, PAL.cream); rect(g, 12, 3, 1, 6, PAL.stone[2]);
+  return c;
+}
+// the catalogue board on the back wall: pinned cards (one for each thing made)
+function paintCatalogBoard() {
+  const { c, g } = makeCanvas(32, 28);
+  box(g, 0, 0, 32, 24, PAL.wood[1]);
+  rect(g, 2, 2, 28, 20, '#b08a5a');
+  const cards = [[4, 4, PAL.cream], [13, 3, '#e0d0a0'], [22, 5, PAL.cream], [5, 13, '#e0d0a0'], [15, 12, PAL.cream], [23, 14, '#e0d0a0']];
+  for (const [x, y, col] of cards) { box(g, x, y, 7, 7, col); px(g, x + 3, y, PAL.red); rect(g, x + 1, y + 3, 5, 1, PAL.stone[2]); }
+  box(g, 3, 22, 3, 6, PAL.wood[0]); box(g, 26, 22, 3, 6, PAL.wood[0]);
+  return c;
+}
+function paintCrate() {
+  const { c, g } = makeCanvas(16, 16);
+  box(g, 1, 3, 14, 13, PAL.wood[2]);
+  rect(g, 2, 4, 12, 1, PAL.wood[4]);
+  rect(g, 2, 9, 12, 1, PAL.wood[1]);
+  rect(g, 7, 4, 1, 11, PAL.wood[1]);
+  return c;
+}
 function paintFountain() {
   const { c, g } = makeCanvas(64, 56);
   const S = PAL.stone, Wt = PAL.water;

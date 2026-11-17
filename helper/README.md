@@ -63,19 +63,25 @@ Marshall is always looking for ways to make the team better. When a townsperson 
 - **Not hired:** they walk out of town.
 - Limits: one candidate at a time; at most 3 workers per townsperson (what a yard fits); a townsperson asks for help at most once a day. Finding a candidate is one Claude run.
 
+## Town meetings
+
+During a meeting, a chat box opens on the left with everyone's picture and name. It starts on **Everyone**: talk to the whole room at once (one Claude run; the people with something useful to say answer, and Marshall can hand out work). Click one person to talk to just them. Drag the box's corner to resize it; **A+** / **A−** make the pictures and names bigger or smaller. Close it with ×, and reopen it with **Meeting Chat** in the toolbar.
+
 ## Notices
 
 Anything Marshall needs you for shows on the **Notices** button (or press **N**): a candidate waiting, finished work to send or save to Gmail, a batch waiting for your go-ahead, a to-do nobody fits, someone asking for help, or a problem. Click one to go to it (a candidate: you walk to the town hall). New ones pop up briefly at the bottom of the screen.
 
 On a Mac, the helper also shows them as **Mac notifications**, even when the village isn't open. Turn them off or on with the switch at the top of the Notices list.
 
-## The Workshop: websites, documents and spreadsheets
+## The General Store (the Workshop): websites, documents and spreadsheets
 
-When a task asks for something real to be made, such as "Create a website", the townsperson (or their worker) makes it as files, and their townsperson checks it like any other work. Agents still have no tools: they write the files in their answer and the helper saves them in the `workshop/` folder, accepting only simple web and text files (.html .css .js .svg .md .txt .csv .json) with plain names.
+The General Store stands east of House 6, on the main street where it leads out of town. When a task asks for something real to be made, whoever makes it walks to a free workbench in the store and works there; their townsperson checks it like any other work. Agents still have no tools: they write the files in their answer and the helper saves them in the `workshop/` folder, accepting only simple web and text files (.html .css .js .svg .md .txt .csv .json) with plain names.
 
-- **Preview:** a Preview button appears in Marshall's chat, on your to-do list and in Notices. It opens the work in a new tab, sealed off so a previewed page can't press any village buttons.
-- **Publish (websites only):** press Publish and confirm. The helper puts the site on your free GitHub Pages website at `https://<your-github-name>.github.io/<site-name>/`. It's public, and it can take a minute or two to appear. Press Publish again later to update it.
-- Websites go to Ezra (Product), and Rufus can supply the words.
+- **What gets made:** a website is `index.html`; a document, report, one-pager or **PDF** is a print-ready `document.html` (press **Save as PDF**); a spreadsheet is a `.csv` file (opens in Excel, Numbers or Google Sheets).
+- **Design:** for websites and documents, the makers follow Anthropic's free **frontend-design** Skill (in `agents/skills/`).
+- **Everything made is in the store:** walk in and press **T** (anywhere with nobody next to you). Search, filter by kind, pick one, and **Preview**, **Save as PDF**, **Download** a file or **Download all** (.zip), **Publish** (websites) or **Show in Finder**. Notices about finished work open it there too.
+- Previews open in a sealed-off tab, so a previewed page can't press any village buttons.
+- **Publish (websites only):** confirm, and the helper puts the site on your free GitHub Pages website at `https://<your-github-name>.github.io/<site-name>/` (public; a minute or two to appear). Press Publish again later to update it.
 - The `workshop/` folder stays on your computer (it isn't saved to the village's GitHub repository).
 
 **Set up publishing once:** double-click `mac/Set Up Website Publishing.command`. It installs GitHub's `gh` tool if needed (asking first), signs you in to GitHub in your browser, and creates one public repository for your websites, `<your-github-name>.github.io`, asking first.

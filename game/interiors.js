@@ -30,14 +30,14 @@ const RUGS = [
 ];
 
 function buildInterior(b) {
-  const isHall = b.kind === 'hall';
+  const isHall = b.kind === 'hall', isStore = b.kind === 'store';
   const RW = ROOM_W, RH = ROOM_H, W = RW * T, H = RH * T;
   const doorCol = Math.floor(RW / 2);
   const r = rng(b.index * 101 + 7);
   const wp = WALLPAPERS[isHall ? 2 : b.index % WALLPAPERS.length];
   const fl = FLOORS[isHall ? 0 : b.index % FLOORS.length];
   const rug = RUGS[isHall ? 0 : b.index % RUGS.length];
-  const mirror = !isHall && b.index % 2 === 1;
+  const mirror = !isHall && !isStore && b.index % 2 === 1;
 
   const solid = grid(RW, RH, false);
   const objects = [];
@@ -90,7 +90,25 @@ function buildInterior(b) {
 
   // ---- furniture (all against walls or on rugs; the door lane stays open) ----
   const chair = paintChair(), chairBack = paintChairBack();
-  if (!isHall) {
+  if (isStore) {
+    // the General Store: goods on the back wall, the catalogue board in the middle,
+    // four workbenches where townspeople and workers make things, and the counter
+    place(paintGoodsShelf(71), 1, 1, 2, 1);
+    place(paintGoodsShelf(72), 3, 1, 2, 1);
+    place(paintGoodsShelf(73), 5, 1, 2, 1);
+    place(paintCatalogBoard(), 8, 1, 1, 1);
+    place(paintGoodsShelf(74), 10, 1, 2, 1);
+    place(paintGoodsShelf(75), 12, 1, 2, 1);
+    place(paintGoodsShelf(76), 14, 1, 2, 1);
+    paintRug(g, 1 * T + 4, 3 * T + 4, 6 * T - 8, 3 * T - 6, rug);
+    paintRug(g, 10 * T + 4, 3 * T + 4, 6 * T - 8, 3 * T - 6, rug);
+    for (const x of [2, 5, 11, 14]) { place(paintDesk(80 + x), x, 4, 2, 1); place(chairBack, x, 5, 1, 1); }
+    place(paintCounter(4), 11, 7, 4, 1);
+    place(paintBarrel(), 1, 7, 1, 1);
+    place(paintCrate(), 2, 8, 1, 1);
+    place(paintCrate(), 5, 8, 1, 1);
+    place(paintPlant(17), 15, 8, 1, 1);
+  } else if (!isHall) {
     const quilt = RUGS[(b.index + 1) % RUGS.length];
     // back wall
     place(paintShelf(b.index + 3, 2), 2, 1, 2, 1);
@@ -146,7 +164,11 @@ function buildInterior(b) {
   return {
     name: b.id, label: b.label, w: RW, h: RH, ground: groundHi, objects, building: b, isRoom: true,
     // the chair at the owner's desk (where they sit while working)
-    deskChair: isHall ? { x: 13, y: 5 } : { x: mx(13, 1), y: 5 },
+    deskChair: isHall ? { x: 13, y: 5 } : isStore ? null : { x: mx(13, 1), y: 5 },
+    // the General Store's workbench seats (people making things sit here), and where its counter is
+    workbenches: isStore ? [[2, 5], [5, 5], [11, 5], [14, 5]] : null,
+    counter: isStore ? { x0: 11, x1: 14, y: 7 } : null,
+    catalog: isStore ? { x: 8, y: 1 } : null,
     // walls are thin, so they are checked in pixels rather than whole tiles
     bounds: { left: WALL_SIDE + 1, right: W - WALL_SIDE - 1, top: WALL_TOP + 2, bottom: H - WALL_BOTTOM - 1, doorX0, doorX1 },
     solidAt: (x, y) => x < 0 || y < 0 || x >= RW || y >= RH || solid[y][x],

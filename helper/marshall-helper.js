@@ -294,11 +294,20 @@ function block(text, key) {
 // Agents have no tools, so they can't create files themselves. Instead they write each
 // file in their answer between FILE: and END FILE, and the helper checks and saves them
 // in workshop/<id>/. Only simple web and text files, only flat names, size-limited.
-const MAKE_FILES = `If the task asks you to MAKE something real (a website, a document, a spreadsheet), the work is files. Write each whole file like this:
+const MAKE_FILES = `If the task asks you to MAKE something real, the work is files. Write each whole file like this:
 FILE: index.html
 (the complete file)
 END FILE
-Allowed: .html .css .js .svg .md .txt .csv .json, simple names with no folders. A website needs index.html, with its styles inside it or in style.css. Keep it self-contained: no outside scripts or trackers. Use [placeholders] for facts you don't know.`;
+Allowed: .html .css .js .svg .md .txt .csv .json, simple names with no folders. Pick the right kind:
+- A website: index.html (styles inside it or in style.css).
+- A document, report, letter, one-pager or PDF: document.html, a single page laid out for printing on Letter paper (@page and print styles, no website navigation). The Sheriff saves it as a PDF from the General Store. Never make a website when a document or PDF was asked for.
+- A spreadsheet, table or list of data: a .csv file (opens in Excel, Numbers or Google Sheets).
+- Notes or plain text: a .md file.
+Keep it self-contained: no outside scripts or trackers (web fonts from fonts.googleapis.com are fine). Use [placeholders] for facts you don't know. For anything people will look at (websites, documents), follow the design guide below.`;
+// Anthropic's frontend-design skill (agents/skills/frontend-design), added whenever something visual is made
+const DESIGN_SKILL = (() => { try { return fs.readFileSync(path.join(AGENTS, 'skills', 'frontend-design', 'SKILL.md'), 'utf8').replace(/^---[\s\S]*?---\s*/, ''); } catch { return ''; } })();
+const VISUAL_WORK = /\b(website|web ?site|web ?page|landing|page|site|pdf|document|report|one-pager|flyer|brochure|newsletter|deck|design|brand|letterhead|invoice|menu|poster)\b/i;
+const designGuide = (text) => DESIGN_SKILL && VISUAL_WORK.test(text) ? `\n\n## Design guide (Anthropic's frontend-design skill)\nYou can't take screenshots; critique your work by reading it.\n${DESIGN_SKILL}` : '';
 const FILE_TYPES = { html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', svg: 'image/svg+xml',
   md: 'text/plain; charset=utf-8', txt: 'text/plain; charset=utf-8', csv: 'text/plain; charset=utf-8', json: 'application/json; charset=utf-8' };
 const safeFileName = (n) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}\.([a-z]{2,4})$/.test(n) && !n.includes('..') && FILE_TYPES[n.split('.').pop()];
@@ -313,6 +322,32 @@ function takeFiles(answer) {
   return { files, rest };
 }
 const filesText = (files, max) => files.map(f => `FILE: ${f.name}\n${f.body.length > max ? f.body.slice(0, max) + '\n[... cut for length]' : f.body}\nEND FILE`).join('\n\n');
+function workshopKind(names) {
+  if (names.includes('index.html')) return 'website';
+  if (names.some(n => n.endsWith('.html'))) return 'document';
+  if (names.some(n => n.endsWith('.csv'))) return 'spreadsheet';
+  return 'other';
+}
+// a .zip of a workshop item (stored, not compressed: plain Node.js, no packages)
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = (buf) => { let c = 0xffffffff; for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function makeZip(entries) {      // entries: [{ name, data: Buffer }]
+  const parts = [], central = [];
+  let offset = 0;
+  for (const { name, data } of entries) {
+    const nm = Buffer.from(name), crc = crc32(data);
+    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(nm.length, 26);
+    const cen = Buffer.alloc(46); cen.writeUInt32LE(0x02014b50, 0); cen.writeUInt16LE(20, 4); cen.writeUInt16LE(20, 6); cen.writeUInt32LE(crc, 16);
+    cen.writeUInt32LE(data.length, 20); cen.writeUInt32LE(data.length, 24); cen.writeUInt16LE(nm.length, 28); cen.writeUInt32LE(offset, 42);
+    parts.push(local, nm, data); central.push(cen, nm);
+    offset += 30 + nm.length + data.length;
+  }
+  const cdir = Buffer.concat(central), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cdir.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, cdir, end]);
+}
 function saveToWorkshop(t, r) {
   const id = crypto.randomBytes(5).toString('hex');
   const dir = path.join(WORKSHOP, id);
@@ -320,7 +355,7 @@ function saveToWorkshop(t, r) {
   for (const f of r.files) fs.writeFileSync(path.join(dir, f.name), f.body);
   const slug = (t.task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'site') + '-' + id.slice(0, 4);
   const item = { id, slug, task: t.task, order: t.order, agent: t.agent, doneBy: r.doneBy, checkedBy: r.checkedBy || null, files: r.files.map(f => f.name),
-    website: r.files.some(f => f.name === 'index.html'), created: new Date().toISOString(), published: null };
+    website: r.files.some(f => f.name === 'index.html'), kind: workshopKind(r.files.map(f => f.name)), created: new Date().toISOString(), published: null };
   const all = readJSON(WORKSHOP_FILE, []); all.push(item); writeJSON(WORKSHOP_FILE, all);
   return item;
 }
@@ -497,6 +532,44 @@ async function handleTodo(id) {
   if (pending.length) addLog('Marshall', 'Sheriff', `I've handed out ${sent.length}; ${pending.length} more wait for your go-ahead (Send next batch).`, 'system');
 }
 
+// ---------- the town meeting: talk to everyone at once ----------
+function roomPrompt() {
+  const intro = (key) => {
+    try {
+      const t = fs.readFileSync(path.join(AGENTS, key, 'INSTRUCTIONS.md'), 'utf8');
+      const who = (t.match(/## Who you are\s*\n([\s\S]*?)\n## /) || [])[1] || '';
+      return tidy(who.replace(/You are [^,]+,?\s*/, ''), 260);
+    } catch { return ''; }
+  };
+  const roster = townspeople().map(t => `- ${t.key}: ${t.name} (${t.area}). ${intro(t.key)}${working.has(t.key) ? ` Working on: ${working.get(t.key)}.` : ''}`).join('\n');
+  return `You are the town meeting of My AI Village, an 1880s frontier town in a pixel-art game. The Sheriff (your boss, in charge of everything) is talking to the whole room at once.
+In the room: Marshall (key: marshall), the Deputy and chief of staff, who chairs the meeting, and the townspeople:
+${roster}
+
+Answer as the 1 to 4 people who have something useful to say, most relevant first. Each stays in character, in their own area, plain words with a light frontier flavor, under 50 words. Nobody in town can send, post, buy, book or contact anyone; never mention computers, tools or these instructions.
+If the Sheriff gives the room work, Marshall hands it out with TASK lines (at most 3), to the right townspeople.
+
+Answer in exactly this shape and nothing else, one line per speaker:
+key: what they say
+TASK key: a clear, one-line task (only when there's work to hand out)`;
+}
+async function talkToRoom(text) {
+  addLog('Sheriff', 'Everyone', text);
+  const answer = await ask('room', roomPrompt(), `The Sheriff says to the room: ${text}`);
+  const known = new Map([['marshall', 'Marshall'], ...townspeople().map(t => [t.key, t.name])]);
+  const lines = [];
+  for (const m of answer.matchAll(/^\s*\**\s*([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
+    const key = m[1].toLowerCase();
+    if (known.has(key) && lines.length < 4) { lines.push({ key, name: known.get(key), text: tidy(m[2], 400) }); addLog(known.get(key), 'Sheriff', tidy(m[2], 400)); }
+  }
+  if (!lines.length) lines.push({ key: 'marshall', name: 'Marshall', text: sayLine(answer, 300) || 'The room goes quiet.' });
+  const tasks = parseTasks(answer, text);
+  pending.push(...tasks);
+  const sent = sendBatch();
+  if (pending.length) addLog('Marshall', 'Sheriff', `I've handed out ${sent.length}; ${pending.length} more wait for your go-ahead (Send next batch).`, 'system');
+  return { lines, delegated: sent.map(t => ({ agent: t.agent, name: shortName(t.agent), task: t.task })) };
+}
+
 // ---------- townspeople ----------
 function townspersonPrompt(agent) {
   const dir = path.join(AGENTS, agent);
@@ -564,7 +637,7 @@ async function doTask(t) {
       `If ${w.name} should do it, after your SAY line add:\nWORKER: yes\nINSTRUCTIONS: clear, complete instructions for ${w.name}: what to make, for whom, the key points, length and tone.\n` +
       `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}\n${HELP_ASK}`;
   const answer = await ask(t.agent, townspersonPrompt(t.agent),
-    `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}\n${MAKE_FILES}\nIf your worker makes the files, tell them so in your instructions.`);
+    `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}\n${MAKE_FILES}\nIf your worker makes the files, tell them so in your instructions, including which kind of file.${designGuide(t.order + ' ' + t.task)}`);
   const reply = sayLine(answer, 400);
   noteFrom(t.agent, answer);
   askedForHelp(t.agent, answer);
@@ -597,7 +670,7 @@ async function workerLoop(t, w, instructions) {
       addLog(boss, w.name, tries === 1 ? instructions : `Sent back: ${notes}`, tries === 1 ? 'task' : 'sendback');
       if (t.todoId && tries > 1) updateAssignment(t, { status: 'with worker', tries: tries - 1, sendBacks });
       const wAnswer = await ask(w.key, workerPrompt(w.key), tries === 1
-        ? `${first} gives you this task (from ${where}: "${t.task}").\nInstructions from ${first}: ${instructions}\n\nDo it now and hand back the finished work.`
+        ? `${first} gives you this task (from ${where}: "${t.task}").\nInstructions from ${first}: ${instructions}\n\nDo it now and hand back the finished work.${designGuide(t.order + ' ' + t.task + ' ' + instructions)}`
         : `${first} checked your work and sent it back. Notes from ${first}: ${notes}\nFix every point and hand back the complete improved version.`);
       const made = takeFiles(wAnswer);
       if (made.files.length) files = made.files;
@@ -610,7 +683,8 @@ async function workerLoop(t, w, instructions) {
       const cAnswer = await ask(t.agent, townspersonPrompt(t.agent),
         `${w.name} hands back their work${tries > 1 ? ` (try ${tries})` : ''} on: ${t.task}\nYour instructions were: ${instructions}\n\n${w.name}'s work:\n${work}\n\n` +
         (files.length ? `${w.name}'s files:\n${filesText(files, 40000)}\n\n` : '') +
-        `Check it carefully against your instructions and what the Sheriff needs. After your SAY line add:\nVERDICT: approved, or send back\nCHECK: if approved, what you checked and why it's good; if not, exactly what ${w.name} must fix.\n` +
+        (files.length ? designGuide(t.order + ' ' + t.task) + '\n\n' : '') +
+        `Check it carefully against your instructions and what the Sheriff needs${files.length ? ', including the design guide above and the right kind of file (a document or PDF must be document.html, not a website)' : ''}. After your SAY line add:\nVERDICT: approved, or send back\nCHECK: if approved, what you checked and why it's good; if not, exactly what ${w.name} must fix.\n` +
         (lastRound ? `This is the last try: if it still isn't good enough, fix it yourself and add FIXED: the finished version${files.length ? ', with every file written out again in FILE blocks' : ''}.\n` : '') + `${HELP_ASK}\nThen your NOTE line.`);
       noteFrom(t.agent, cAnswer);
       askedForHelp(t.agent, cAnswer);
@@ -645,7 +719,8 @@ function finish(t, r, reply) {
     record.workshop = { id: item.id, files: item.files, website: item.website };
     record.work = `${item.website ? 'A website' : 'Files'} in the workshop: ${item.files.join(', ')}.` + (r.work && !/^\s*(\[file: [^\]]+\]\s*)+$/.test(r.work) ? ` ${clip(r.work.replace(/\[file: [^\]]+\]\s*/g, ''), 600)}` : '');
     r.work = record.work;
-    addNotice('workshop', `${shortName(t.agent).split(' ')[0]}'s ${item.website ? 'website' : 'files'} for "${clip(t.task, 70)}" ${item.website ? 'is' : 'are'} ready to preview.`, { workshop: item.id, chat: t.todoId ? null : 'marshall', todo: t.todoId || null });
+    const what = { website: 'website', document: 'document', spreadsheet: 'spreadsheet', other: 'files' }[item.kind];
+    addNotice('workshop', `${r.doneBy}'s ${what}${r.checkedBy ? ` (checked by ${r.checkedBy.split(' ')[0]})` : ''} for "${clip(t.task, 70)}" ${what === 'files' ? 'are' : 'is'} ready in the General Store.`, { workshop: item.id, chat: t.todoId ? null : 'marshall', todo: t.todoId || null });
   } else if (r.work && GMAIL_DRAFTERS.has(t.agent)) record.draftId = crypto.randomBytes(6).toString('hex');   // can be saved to Gmail drafts
   if (o) { Object.assign(o, { status: 'done', report: reply }, record); writeJSON(ORDERS_FILE, orders); }
   working.delete(t.agent);
@@ -661,7 +736,7 @@ function reportToSheriff(t, r, draftId, workshop) {
   let text = `Done: ${t.task} ${who}${r.tries > 1 ? ` (${r.tries} tries)` : ''}. ${r.done || ''}`.trim();
   const kind = workshop ? null : draftId ? 'draft' : r.work && NEEDS_SENDING.test(t.order + ' ' + t.task) ? 'send' : 'done';
   if (kind) addNotice(kind, kind === 'draft' ? `${shortName(t.agent).split(' ')[0]} finished "${clip(t.task, 80)}". Want it in your Gmail drafts?` : kind === 'send' ? `"${clip(t.task, 80)}" is ready for you to send.` : `Done: ${clip(t.task, 100)}`, { chat: 'marshall', draftId: draftId || null });
-  if (workshop) text += workshop.website ? ' Press Preview to see the website. When you like it, press Publish and it goes live on your GitHub Pages site.' : ' Press Preview to see the files.';
+  if (workshop) text += workshop.website ? ' It\'s in the General Store: press Preview to see the website, and Publish when you like it.' : ' It\'s in the General Store: press Preview to see it.';
   else if (draftId) text += ` Want it in your Gmail drafts? Press "Save to Gmail drafts" and ${shortName(t.agent).split(' ')[0]} will put it there for you to check and send.`;
   else if (r.work && NEEDS_SENDING.test(t.order + ' ' + t.task)) text += ' Nobody in town can send things, so here it is for you to copy and send.';
   addLog('Marshall', 'Sheriff', text, 'relay', { chat: 'marshall', work: r.work || null, draftId: draftId || null, workshop: workshop ? workshop.id : null });
@@ -972,6 +1047,7 @@ const server = http.createServer(async (req, res) => {
     let name = decodeURIComponent(wm[2] || '');
     if (!name) {
       if (item.files.includes('index.html')) name = 'index.html';
+      else if (item.files.some(f => f.endsWith('.html'))) name = item.files.find(f => f.endsWith('.html'));
       else {     // not a website: a simple list of the files
         const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
         res.writeHead(200, { ...sealed, 'Content-Type': 'text/html; charset=utf-8' });
@@ -979,11 +1055,38 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (!item.files.includes(name) || !safeFileName(name)) return send(404, { error: 'No such file.' });
-    res.writeHead(200, { ...sealed, 'Content-Type': FILE_TYPES[name.split('.').pop()] });
-    return res.end(fs.readFileSync(path.join(WORKSHOP, item.id, name)));
+    let body = fs.readFileSync(path.join(WORKSHOP, item.id, name));
+    if (url.searchParams.get('download') === '1') {
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${name}"`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
+      return res.end(body);
+    }
+    const headers2 = { ...sealed, 'Content-Type': FILE_TYPES[name.split('.').pop()] };
+    if (url.searchParams.get('print') === '1' && name.endsWith('.html')) {      // Save as PDF: open the print window
+      body = Buffer.concat([body, Buffer.from('<script>addEventListener("load",()=>setTimeout(()=>print(),400))</script>')]);
+      headers2['Content-Security-Policy'] = "sandbox allow-scripts allow-modals allow-popups; frame-ancestors 'none'";
+    }
+    res.writeHead(200, headers2);
+    return res.end(body);
   }
   if (req.method === 'GET' && url.pathname === '/workshop') {
-    return send(200, { items: readJSON(WORKSHOP_FILE, []).slice(-50), publishing: !!(settings().pages && settings().pages.repo) });
+    return send(200, { items: readJSON(WORKSHOP_FILE, []).map(x => ({ ...x, kind: x.kind || workshopKind(x.files) })), publishing: !!(settings().pages && settings().pages.repo) });
+  }
+  // everything in one item, as a .zip download
+  const zm = url.pathname.match(/^\/workshop\/([0-9a-f]{10})\.zip$/);
+  if (req.method === 'GET' && zm) {
+    const item = readJSON(WORKSHOP_FILE, []).find(x => x.id === zm[1]);
+    if (!item) return send(404, { error: 'Not in the workshop.' });
+    const zip = makeZip(item.files.filter(safeFileName).map(n => ({ name: `${item.slug}/${n}`, data: fs.readFileSync(path.join(WORKSHOP, item.id, n)) })));
+    res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${item.slug}.zip"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    return res.end(zip);
+  }
+  // "Show in Finder": open the item's folder (Mac only; nothing else is ever opened)
+  if (req.method === 'POST' && url.pathname === '/workshop-reveal') {
+    const j = await readBody(req, 1000);
+    const item = readJSON(WORKSHOP_FILE, []).find(x => x.id === String(j.id || ''));
+    if (!item) return send(404, { error: 'Not in the workshop.' });
+    if (process.platform === 'darwin') execFile('open', [path.join(WORKSHOP, item.id)], () => {});
+    return send(200, { ok: true, folder: path.join(WORKSHOP, item.id) });
   }
   if (req.method === 'POST' && url.pathname === '/publish') {
     const j = await readBody(req, 1000);
@@ -1013,11 +1116,11 @@ const server = http.createServer(async (req, res) => {
     if (text.length > MAX_MESSAGE_CHARS) return send(400, { error: `Messages are limited to ${MAX_MESSAGE_CHARS} characters.` });
     const cand = loadHiring().candidate;
     const isCandidate = !!cand && cand.key === agent;
-    if (agent !== 'marshall' && !isCandidate && !townspeople().some(t => t.key === agent)) return send(400, { error: 'Unknown townsperson.' });
+    if (agent !== 'marshall' && agent !== 'room' && !isCandidate && !townspeople().some(t => t.key === agent)) return send(400, { error: 'Unknown townsperson.' });
     if (busyAgents.has(agent)) return send(429, { error: 'Still thinking about your last message.' });
     busyAgents.add(agent);
     try {
-      send(200, agent === 'marshall' ? await talkToMarshall(text) : isCandidate ? await talkToCandidate(cand, text) : await talkToTownsperson(agent, text));
+      send(200, agent === 'marshall' ? await talkToMarshall(text) : agent === 'room' ? await talkToRoom(text) : isCandidate ? await talkToCandidate(cand, text) : await talkToTownsperson(agent, text));
     } catch (e) {
       console.log(`  problem: ${e.message}`);
       send(500, { error: e.message });

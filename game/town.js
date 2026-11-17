@@ -1,12 +1,12 @@
 'use strict';
-// town.js: the layout of the Frontier town (60 x 44 tiles).
+// town.js: the layout of the Frontier town (70 x 44 tiles).
 // Exactly 10 houses plus a town hall around a dirt town square with a fountain.
 // In this three-quarter view only the front (south) wall of a building shows,
 // so every door is on that wall. Houses on the north row open straight onto
 // the main street and square; houses on the west and east sides have a path
 // from their yard into the square.
 
-const TOWN_W = 60, TOWN_H = 44;
+const TOWN_W = 70, TOWN_H = 44;
 
 // The 10 houses, in order. Each gets its own look so they are easy to tell apart.
 const HOUSE_SPOTS = [
@@ -58,8 +58,8 @@ function buildTown() {
     for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) solid[j][i] = true;
   };
 
-  // dirt: main street, town square, road out of town to the south
-  setKind(2, 13, 56, 2, 'dirt');
+  // dirt: main street (running east past the General Store and out of town), town square, road out of town to the south
+  setKind(2, 13, W - 2, 2, 'dirt');
   setKind(12, 13, 36, 22, 'dirt');
   setKind(28, 35, 4, 9, 'dirt');
 
@@ -101,6 +101,17 @@ function buildTown() {
   doors[hall.door.y][hall.door.x] = hall.id;
   reserve(hall.x - 1, hall.y - 2, hall.w + 2, hall.h + 3);
   setKind(27, 10, 5, 3, 'board');
+
+  // the General Store (the Workshop), east of House 6 on the road out of town, with a boardwalk porch
+  const store = { id: 'store', label: 'General Store', kind: 'store', index: 11, x: 57, y: 6, w: 7, h: 4, door: { x: 60, y: 9 } };
+  buildings.push(store);
+  addObj(objects, paintStore(), store.x, store.y, store.w, store.h);
+  block(store.x, store.y, store.w, store.h);
+  solid[store.door.y][store.door.x] = false;
+  doors[store.door.y][store.door.x] = store.id;
+  reserve(store.x - 1, store.y - 2, store.w + 2, store.h + 6);
+  setKind(store.x, 10, store.w, 1, 'board');
+  setKind(store.door.x, 11, 1, 2, 'path');
 
   // fountain and water trough in the middle of the square
   addObj(objects, paintFountain(), 28, 22, 4, 3);
