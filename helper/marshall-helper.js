@@ -32,7 +32,18 @@ const PORT = Number(process.env.MARSHALL_PORT) || 7777;
 const MODEL = process.env.MARSHALL_MODEL || 'claude-opus-5-5';              // everyone runs on Opus 5.5
 const ADVISOR = process.env.TOWNSFOLK_ADVISOR || 'opus';                    // townspeople's advisor (Opus 5.5 for now)
 const WORKER_MODEL = process.env.WORKER_MODEL || 'claude-sonnet-5-5';       // workers run on Sonnet 5.5
-const MAX_TRIES = 3;             // a worker gets at most 2 send-backs; after that the townsperson fixes it
+const MAX_TRIES = 3;
+// Gmail drafts: only these townspeople may save a draft, only with the Sheriff's yes (a button),
+// and only with the create-draft tool. Sending, deleting, labelling and reading mail stay blocked.
+const GMAIL_DRAFTERS = new Set(['rufus']);
+const GMAIL_SERVER = process.env.GMAIL_MCP_SERVER || 'claude_ai_Gmail';    // "claude.ai Gmail" in Claude Code's /mcp
+const DRAFT_TOOL = `mcp__${GMAIL_SERVER}__create_draft`;
+const BLOCKED_TOOLS = ['Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'Agent',
+  ...['send_message', 'reply', 'forward', 'update_draft', 'delete_draft', 'list_drafts', 'get_draft', 'get_thread', 'get_message',
+    'search_threads', 'list_labels', 'label_thread', 'unlabel_thread', 'label_message', 'unlabel_message', 'update_message_labels',
+    'apply_sensitive_thread_label', 'apply_sensitive_message_label', 'trash_thread', 'trash_message', 'untrash_thread', 'untrash_message',
+    'mark_thread_spam', 'mark_message_spam', 'unmark_thread_spam', 'unmark_message_spam', 'create_label', 'update_label', 'delete_label',
+    'download_gmail_attachment'].map(t => `mcp__${GMAIL_SERVER}__${t}`)];             // a worker gets at most 2 send-backs; after that the townsperson fixes it
 const CLAUDE = process.env.MARSHALL_CLAUDE_BIN || 'claude';
 const TIMEOUT_MS = 180000;
 const MAX_MESSAGE_CHARS = 2000;
@@ -125,19 +136,23 @@ let noAdvisor = false;          // set if this Claude Code doesn't support the a
 let systemPromptFlag = 'replace';
 
 // One message to one agent. Returns the plain text they answered.
-async function ask(agent, systemPrompt, message) {
+// opts.allowTools: the only tools this run may use (default: none at all). Such runs start a
+// fresh conversation each time. opts.result receives Claude Code's full answer.
+async function ask(agent, systemPrompt, message, opts = {}) {
   const isWorker = !!workerInfo(agent);
+  const tools = opts.allowTools || null;
   return limited(async () => {
-    const sessions = readJSON(SESSIONS_FILE, {});
+    const sessions = tools ? {} : readJSON(SESSIONS_FILE, {});
     const version = crypto.createHash('sha1').update(agent === 'marshall' ? systemPrompt : systemPrompt.split('## Your notes')[0]).digest('hex').slice(0, 12);
     let s = sessions[agent] || {};
     if (s.version !== version) s = { version };                 // instructions changed: fresh conversation
 
-    const promptFile = path.join(HOME, `prompt-${agent}.md`);
+    const promptFile = path.join(HOME, `prompt-${agent}${tools ? '-tools' : ''}.md`);
     fs.writeFileSync(promptFile, systemPrompt);
     const build = () => {
       const args = ['-p', message, '--model', isWorker ? WORKER_MODEL : MODEL, '--output-format', 'json',
-        '--disallowedTools', '*', '--permission-mode', 'dontAsk', '--max-turns', '2'];
+        ...(tools ? ['--allowedTools', tools.join(','), '--disallowedTools', BLOCKED_TOOLS.join(',')] : ['--disallowedTools', '*']),
+        '--permission-mode', 'dontAsk', '--max-turns', tools ? '4' : '2'];
       args.push(...(systemPromptFlag === 'append' ? ['--append-system-prompt-file', promptFile] : ['--system-prompt', systemPrompt]));
       if (agent !== 'marshall' && !isWorker && !noAdvisor && ADVISOR !== 'none') args.push('--advisor', ADVISOR);
       if (s.sessionId) args.push('--resume', s.sessionId);
@@ -158,7 +173,9 @@ async function ask(agent, systemPrompt, message) {
     if (run.spawnError) throw new Error(`Couldn't start Claude Code ("${CLAUDE}"). Is it installed and on your PATH? (${run.err})`);
     let obj;
     try { obj = JSON.parse(run.out); } catch { throw new Error(`Claude Code didn't answer as expected. ${(run.err || run.out).trim().slice(0, 300)}`); }
-    if (obj.session_id) s.sessionId = obj.session_id;
+    if (opts.result) opts.result(obj);
+    if (obj.session_id && !tools) s.sessionId = obj.session_id;
+    if (tools) return typeof obj.result === 'string' ? obj.result : '';
     const latest = readJSON(SESSIONS_FILE, {});                // re-read: someone else's run may have finished meanwhile
     latest[agent] = s;
     writeJSON(SESSIONS_FILE, latest);
@@ -486,20 +503,65 @@ function finish(t, r, reply) {
   const orders = readJSON(ORDERS_FILE, []);
   const o = [...orders].reverse().find(x => x.to === t.agent && x.task === t.task && x.status === 'handed out');
   const record = { result: r.done, work: r.work || null, doneBy: r.doneBy, checkedBy: r.checkedBy || null, tries: r.tries, sendBacks: r.sendBacks };
+  if (r.work && GMAIL_DRAFTERS.has(t.agent)) record.draftId = crypto.randomBytes(6).toString('hex');   // can be saved to Gmail drafts
   if (o) { Object.assign(o, { status: 'done', report: reply }, record); writeJSON(ORDERS_FILE, orders); }
   working.delete(t.agent);
-  if (!t.todoId && t.from !== 'Sheriff') reportToSheriff(t, r);
+  if (!t.todoId && t.from !== 'Sheriff') reportToSheriff(t, r, record.draftId);
   if (t.todoId) updateAssignment(t, { status: 'done', report: reply, instructions: r.instructions || null, doneAt: new Date().toISOString(), ...record });
 }
 
 // Marshall tells the Sheriff an order is done: who did it, who checked it, and the work itself.
 const NEEDS_SENDING = /\b(send|sent|e-?mail|mail|post|text|message|deliver|call|book|buy)\b/i;
-function reportToSheriff(t, r) {
+function reportToSheriff(t, r, draftId) {
   const first = (n) => String(n || '').split(' ')[0];
   const who = r.checkedBy ? `${r.doneBy} did it and ${first(r.checkedBy)} checked it` : `${r.doneBy} did it`;
   let text = `Done: ${t.task} ${who}${r.tries > 1 ? ` (${r.tries} tries)` : ''}. ${r.done || ''}`.trim();
-  if (r.work && NEEDS_SENDING.test(t.order + ' ' + t.task)) text += ' Nobody in town can send things, so here it is for you to copy and send.';
-  addLog('Marshall', 'Sheriff', text, 'relay', { chat: 'marshall', work: r.work || null });
+  if (draftId) text += ` Want it in your Gmail drafts? Press "Save to Gmail drafts" and ${shortName(t.agent).split(' ')[0]} will put it there for you to check and send.`;
+  else if (r.work && NEEDS_SENDING.test(t.order + ' ' + t.task)) text += ' Nobody in town can send things, so here it is for you to copy and send.';
+  addLog('Marshall', 'Sheriff', text, 'relay', { chat: 'marshall', work: r.work || null, draftId: draftId || null });
+}
+
+// ---------- Gmail drafts (only with the Sheriff's yes) ----------
+function findDraftable(draftId) {
+  const orders = readJSON(ORDERS_FILE, []);
+  const o = orders.find(x => x.draftId === draftId);
+  if (o) return { agent: o.to, order: o.order, task: o.task, work: o.work, gmail: o.gmail, save: (g) => { const all = readJSON(ORDERS_FILE, []); const x = all.find(y => y.draftId === draftId); if (x) { x.gmail = g; writeJSON(ORDERS_FILE, all); } } };
+  for (const todo of loadTodos()) for (const a of todo.assignments) if (a.draftId === draftId) {
+    return { agent: a.agent, order: todo.text, task: a.task, work: a.work, gmail: a.gmail, save: (g) => { const all = loadTodos(); for (const t of all) for (const b of t.assignments) if (b.draftId === draftId) b.gmail = g; saveTodos(all); } };
+  }
+  return null;
+}
+async function saveGmailDraft(draftId) {
+  const d = findDraftable(draftId);
+  if (!d || !d.work) throw new Error('That piece of work was not found.');
+  if (!GMAIL_DRAFTERS.has(d.agent)) throw new Error('Only Rufus can save Gmail drafts.');
+  if (d.gmail && d.gmail.status === 'saved') return d.gmail;
+  const name = shortName(d.agent);
+  addLog('Sheriff', name, 'Yes: save it to my Gmail drafts.', 'chat');
+  let obj = null;
+  const answer = await ask(d.agent, townspersonPrompt(d.agent) + `
+
+## Saving to the Sheriff's Gmail drafts
+The Sheriff said yes: save this piece as ONE draft in the Sheriff's Gmail, using the create-draft tool exactly once.
+You can only save a draft. Never send, reply, forward, delete or read any mail; the Sheriff checks the draft and sends it.
+- to: the recipient's plain email address if the Sheriff's order gives one; otherwise leave it empty.
+- subject: the piece's subject line if it has one, otherwise a short fitting subject.
+- body: the piece itself as plain text (no Markdown), without the subject line. Keep placeholders like [Name] as they are.
+Then answer in exactly these lines:
+SAY: one short line to the Sheriff
+DRAFT: saved, or not saved and why
+LINK: the draft's link if the tool gave one, or none`,
+    `The Sheriff's order: "${d.order}"\nThe task: ${d.task}\n\nThe finished piece:\n${d.work}`,
+    { allowTools: [DRAFT_TOOL], result: (o) => { obj = o; } });
+  const denied = (obj && obj.permission_denials || []).map(x => x.tool_name).filter(Boolean);
+  const saved = /^\W*saved/i.test(grab(answer, 'DRAFT'));
+  const link = (answer.match(/https:\/\/mail\.google\.com\/\S+/) || [])[0] || '';
+  const g = saved
+    ? { status: 'saved', link, time: new Date().toISOString() }
+    : { status: 'not saved', reason: tidy(grab(answer, 'DRAFT') || answer || 'no reply', 300) + (denied.length ? ` (blocked tools: ${[...new Set(denied)].join(', ')})` : ''), time: new Date().toISOString() };
+  d.save(g);
+  addLog(name, 'Sheriff', saved ? `Saved to your Gmail drafts. Check it there and press Send when you're happy.${link ? ' ' + link : ''}` : `Couldn't save it to your Gmail drafts: ${g.reason}`, saved ? 'report' : 'problem', { chat: 'marshall' });
+  return g;
 }
 
 // ---------- workers ----------
@@ -586,6 +648,18 @@ const server = http.createServer(async (req, res) => {
     return send(200, { todo: addTodo(text) });
   }
 
+  // the Sheriff pressed "Save to Gmail drafts" on a finished piece of Rufus's work
+  if (req.method === 'POST' && url.pathname === '/gmail-draft') {
+    const j = await readBody(req, 1000);
+    const id = String(j.draftId || '');
+    if (!/^[0-9a-f]{12}$/.test(id)) return send(400, { error: 'Unknown piece of work.' });
+    if (busyAgents.has('gmail:' + id)) return send(429, { error: 'Already saving it.' });
+    busyAgents.add('gmail:' + id);
+    try { send(200, { gmail: await saveGmailDraft(id) }); }
+    catch (e) { addLog('Rufus Quill', 'Sheriff', `Couldn't save it to your Gmail drafts: ${e.message}`, 'problem', { chat: 'marshall' }); send(500, { error: e.message }); }
+    finally { busyAgents.delete('gmail:' + id); }
+    return;
+  }
   if (req.method === 'POST' && url.pathname === '/next-batch') {
     if (!pending.length) return send(200, { delegated: [], pending: 0 });
     const sent = sendBatch();

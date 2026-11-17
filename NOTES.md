@@ -177,6 +177,7 @@ How it works: everyone moves one square at a time and must claim the next square
 | 96 | 2026-11-17 | **The village helper starts at login** (one helper serves everyone: Marshall, townspeople, workers). Install once by double-clicking `mac/Install Village Helper.command`; remove with `mac/Uninstall Village Helper.command`. It runs in the background with no window, uses no Claude allowance while idle, only answers your computer, and uses only your Pro login. The log is `~/Library/Logs/ai-village-helper.log`. After `git pull` it restarts itself with new helper code once nobody is mid-task. No On/Off switch in the page (you chose start-at-login only). |
 | 97 | 2026-11-17 | **The village drafts and plans; it never sends.** Nobody in town can send, post, buy, book or contact anyone; the Sheriff does any sending. Marshall no longer promises to send, and townspeople say plainly when the Sheriff needs to send something. Sending email for real (connecting Gmail) would be a separate, bigger step, not built. |
 | 98 | 2026-11-17 | **Marshall reports every finished order back** in his chat and in the chat log: who did it, who checked it, how many tries, the finished work in full, and "here it is for you to copy and send" when it needs sending. Problems are reported too. It passes on what was already done, so it costs no extra Claude runs. Townspeople who do a job themselves now hand back the finished piece in full. |
+| 99 | 2026-11-17 | **Rufus can save Gmail drafts, drafts only.** Through the claude.ai Gmail connector on your Claude account (Pro login, no API key). Your yes each time: a "Save to Gmail drafts" button on Rufus's finished work in Marshall's chat and on the to-do list. Only the create-draft tool is allowed; send, reply, forward, delete, labels, trash, spam and reading mail are blocked. Nobody else gets Gmail. No inbox reading (my recommendation; you can add it later). One extra Claude run per save. Marshall hands email/letter drafting to Rufus. |
 
 ## Build log
 
@@ -229,6 +230,7 @@ How it works: everyone moves one square at a time and must claim the next square
 - Added the Mac double-click starter and the copy-old-notes file (tested on a pretend Mac setup). Confirmed GitHub has the workers: a fresh copy shows all 10 in town. Free.
 - Built start-at-login for the village helper (Install/Uninstall double-click files) and self-restart after `git pull`. Tested with stand-ins for macOS (a folder path with spaces too); not yet run on your Mac. Free.
 - After your first real order (a love letter Rufus couldn't send, and Marshall didn't report back): Marshall now reports back with the finished work, and nobody promises to send. Tested with the stand-in (absolute path): both the do-it-yourself path and the worker path report back in Marshall's chat. Free.
+- Built Rufus's Gmail drafts (button, draft-only permissions). Tested with the stand-in: from Marshall's chat and from the to-do list, the save run allowed only `create_draft` and blocked 41 other tools; the draft link shows as "Open it in Gmail". Not yet tried with your real Gmail. Free.
 
 ## Final totals
 

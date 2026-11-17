@@ -163,9 +163,30 @@
     if (cls) line.className = cls;
     if (time) { const t = document.createElement('span'); t.className = 'time'; t.textContent = time; line.appendChild(t); }
     if (who) { const w = document.createElement('span'); w.className = 'who'; w.textContent = who + ': '; line.appendChild(w); }
-    line.appendChild(document.createTextNode(text));
+    if (cls === 'gmailbtn') { line.appendChild(gmailButton(text)); box.appendChild(line); box.scrollTop = box.scrollHeight; return; }
+    // Gmail draft links are clickable; everything else is plain text
+    for (const [i, part] of text.split(/(https:\/\/mail\.google\.com\/\S+)/).entries()) {
+      if (i % 2) { const a = document.createElement('a'); a.href = part; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Open it in Gmail'; line.appendChild(a); }
+      else if (part) line.appendChild(document.createTextNode(part));
+    }
     box.appendChild(line);
     box.scrollTop = box.scrollHeight;
+  }
+  // "Save to Gmail drafts": the Sheriff's yes for Rufus to put a finished piece in their Gmail drafts
+  function gmailButton(draftId) {
+    const b = document.createElement('button');
+    b.className = 'btn gmail'; b.textContent = 'Save to Gmail drafts'; b.title = 'Rufus saves it as a draft in your Gmail. Nothing is sent: you check it and press Send yourself.';
+    b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      b.disabled = true; b.textContent = 'Rufus is saving it…';
+      try {
+        const r = await fetch(HELPER + '/gmail-draft', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draftId }) });
+        const j = await r.json();
+        b.textContent = r.ok && j.gmail && j.gmail.status === 'saved' ? 'Saved to your Gmail drafts' : 'Not saved (see the chat log)';
+      } catch { b.textContent = "Not saved: the village helper isn't running"; }
+      pollTodos();
+    });
+    return b;
   }
   function sayIn(key, who, text, cls) {
     if (!transcripts.has(key)) transcripts.set(key, []);
@@ -288,6 +309,7 @@
         if (e.chat === 'marshall' && !firstPoll) {
           sayIn('marshall', 'Marshall', e.text, e.kind === 'problem' ? 'problem' : '');
           if (e.work) sayIn('marshall', '', e.work, 'work');
+          if (e.draftId) sayIn('marshall', '', e.draftId, 'gmailbtn');
         }
       }
       firstPoll = false;
@@ -353,6 +375,14 @@
       const label = document.createElement('span'); label.textContent = t.text;
       const st = document.createElement('span'); st.className = 'state'; st.textContent = stateLine(t);
       text.append(label, st);
+      for (const a of t.assignments) {
+        if (!a.draftId) continue;
+        if (a.gmail && a.gmail.status === 'saved') {
+          const g = document.createElement(a.gmail.link ? 'a' : 'span'); g.className = 'state';
+          g.textContent = 'In your Gmail drafts'; if (a.gmail.link) { g.href = a.gmail.link; g.target = '_blank'; g.rel = 'noopener'; }
+          text.append(g);
+        } else { const g = gmailButton(a.draftId); g.style.marginTop = '4px'; text.append(g); }
+      }
       li.append(box, text);
       li.addEventListener('mouseenter', (e) => { todoTip.innerHTML = tipText(t); todoTip.style.display = 'block'; placeTip(e); });
       li.addEventListener('mousemove', placeTip);

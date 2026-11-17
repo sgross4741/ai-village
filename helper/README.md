@@ -53,6 +53,16 @@ node helper/marshall-helper.js
 7. Press **To-Do** in the toolbar to add tasks to your to-do list. Marshall hands each one to the right townsperson; when it's done it's crossed off with who did it and who checked it, and hovering over it shows the instructions, any send-back notes and the finished work.
 8. **Esc** or **×** closes a box. When you're done, press **Ctrl+C** in the terminal to stop the helper.
 
+## Gmail drafts (Rufus only)
+
+When Rufus finishes an email or letter (himself or through his worker Pepper), a **Save to Gmail drafts** button appears under it in Marshall's chat and on your to-do list. Press it and Rufus saves it as a draft in your Gmail, through the Gmail connector on your Claude account. You then check it in Gmail and press Send yourself.
+
+- Nothing is saved until you press the button: that's your yes, each time.
+- Rufus can only **create drafts**. Sending, replying, forwarding, deleting drafts, labels, trash, spam and reading your mail are all blocked.
+- Nobody else (Marshall, other townspeople, workers) can touch Gmail.
+- Each save uses one Claude run from your Pro allowance.
+- If it says it couldn't save, the chat log (L) says why. If Claude Code names the Gmail connector differently on your Mac, the helper can be told its name with the `GMAIL_MCP_SERVER` setting.
+
 ## What the helper keeps
 
 Everything stays in `helper/marshall-home/` on your computer:
