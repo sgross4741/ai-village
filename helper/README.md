@@ -33,6 +33,10 @@ Then restart the helper (Ctrl+C, then start it again). Your notes files and Mars
 
 ## Every time you play
 
+On a Mac, the easy way: double-click **`mac/Start Village.command`**. It starts the helper and opens the village. Keep its Terminal window open while you play; close it to stop. (Moving from an older village folder? Double-click **`mac/Copy Old Notes.command`** once to bring everyone's memories across.)
+
+Or by hand:
+
 1. Open a terminal in the `ai-village` folder and start the helper:
 
 ```bash

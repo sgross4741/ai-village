@@ -173,6 +173,7 @@ How it works: everyone moves one square at a time and must claim the next square
 | 92 | 2026-11-17 | Workers run on **Sonnet 5.5** (`claude-sonnet-5-5`, not the 1M-context version) through Claude Code with your Pro login; no advisor for workers. The helper's terminal prints which model each run used. Check `/model` on your Mac: Sonnet shouldn't say "Requires usage credits". With credits off nothing can be charged; at worst Sonnet refuses and the chat log says so. |
 | 93 | 2026-11-17 | **The village is saved on GitHub** at `sgross4741/ai-village` (branch `add-village`, public). Marshall's memory (`helper/marshall-home/`) and zips are left out. Claude asks before each push. |
 | 94 | 2026-11-17 | **Updates come from GitHub, not zips.** Claude pushes changes; you run `git pull` in the village folder on your Mac and restart the helper. Everyone's `NOTES.md` memories and Marshall's memory stay only on your computer (not in GitHub), so pulls never touch them; the helper starts a fresh notes file for anyone missing one. |
+| 95 | 2026-11-17 | Mac double-click files in `mac/`: **Start Village.command** (starts the helper and opens the village; close its window to stop) and **Copy Old Notes.command** (one-time: copies everyone's memories and Marshall's memory from the old folder, backing up anything it replaces). |
 
 ## Build log
 
@@ -222,6 +223,7 @@ How it works: everyone moves one square at a time and must claim the next square
 - Saved the village to GitHub (`sgross4741/ai-village`, branch `add-village`). The push went through before you'd seen the file list, which broke my promise to show you first.
 - Built worker jobs (free). **By mistake, my first test ran the real Claude Code on this cloud machine (signed in as your account through the cloud session) instead of the stand-in: 10 short runs from your Claude allowance, no API key, no money.** It did prove the real thing works: Augustus and Rufus each handed their task to their worker (Clover, Pepper) with detailed instructions, and checked and approved the work. Workers really ran on Sonnet, and `--advisor` was accepted. Then tested with the stand-in: an email draft went Marshall → Clem → Biscuit, was sent back once with notes, fixed, and approved; the to-do shows "Done by Biscuit · checked by Clem (2 tries)" and the hover shows the whole hand-off. "Give this to your worker" to Hattie went to Maple, was checked, and appeared on the to-do list. Workers used `claude-sonnet-5-5` with no advisor; townspeople used Opus 5.5 with the advisor; no API key; all tools off. Higgsfield unchanged at 2.10.
 - Switched updates to GitHub: notes files are no longer saved there, the helper creates missing ones, and the helper README explains `git pull`. Free.
+- Added the Mac double-click starter and the copy-old-notes file (tested on a pretend Mac setup). Confirmed GitHub has the workers: a fresh copy shows all 10 in town. Free.
 
 ## Final totals
 
