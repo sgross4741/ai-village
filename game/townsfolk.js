@@ -329,7 +329,7 @@ function updateTownsperson(p, i, dt, ctx, everyone) {
   }
 
   // 3. What should they be doing?
-  const mode = p.isWorker ? ((ctx.meeting || ctx.workTime) ? 'home' : 'free')
+  const mode = p.isWorker ? ((ctx.meeting || ctx.workTime || p.tasks.length) ? 'home' : 'free')   // a worker with a task works in the yard
     : ctx.meeting ? 'meeting' : (ctx.workTime || p.tasks.length) ? 'working' : 'free';
   if (mode !== p.mode) {
     if (p.mode === 'meeting') { p.leaveDelay = 2.5 + i * 0.7; p.leftSeat = p.meetSeat; p.meetSeat = null; }   // after a meeting: file out one by one

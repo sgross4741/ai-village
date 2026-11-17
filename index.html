@@ -33,6 +33,8 @@
   .lines .to { color: #c9b496; }
   .lines .task .who { color: #a9cd62; }
   .lines .report .who { color: #9ac4e0; }
+  .lines .check .who { color: #d6a8e0; }
+  .lines .sendback .who { color: #e8a090; }
   .lines .note, .lines .system { color: #c9b496; font-size: 12px; }
   .lines .problem { color: #e8a090; }
   .lines .time { color: #8c765e; font-size: 11px; margin-right: 4px; }
@@ -63,7 +65,7 @@
   #todo-list li.problem .state { color: #e8a090; }
   #todo-empty { color: #c9b496; font-size: 12px; padding: 8px 10px; }
   #todo-tip {
-    position: fixed; z-index: 20; display: none; max-width: 380px; padding: 8px 10px;
+    position: fixed; z-index: 20; display: none; max-width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: hidden; padding: 8px 10px;
     color: #f1e6c8; background: #2e1d14; border: 2px solid #e8b84a; box-shadow: 0 0 0 2px #2e1d14;
     font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; pointer-events: none; white-space: pre-wrap;
   }

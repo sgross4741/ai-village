@@ -1,9 +1,9 @@
 # The village helper (everyone's brains)
 
-Marshall (your Deputy) and the ten townspeople think with **Claude Opus 5.5 through Claude Code, signed in with your Claude Pro subscription**. Townspeople also use Opus 5.5 as their advisor when something is hard.
+Marshall (your Deputy) and the ten townspeople think with **Claude Opus 5.5 through Claude Code, signed in with your Claude Pro subscription**. Townspeople also use Opus 5.5 as their advisor when something is hard. Workers (the horses) think with **Claude Sonnet 5.5** the same way, on your subscription.
 
 - There is no API key and no pay-per-use.
-- Every message uses a little of your Pro allowance. That allowance is shared with claude.ai and has a 5-hour limit and a weekly limit. One order to Marshall costs at least two runs: Marshall's, plus one for each townsperson he hands work to (at most 3 at a time).
+- Every message uses a little of your Pro allowance. That allowance is shared with claude.ai and has a 5-hour limit and a weekly limit. One order to Marshall costs at least two runs: Marshall's, plus one for each townsperson he hands work to (at most 3 at a time). Work handed to a worker adds at least two more (the worker's, plus the townsperson's check), and two more for each send-back. The terminal shows which model each run used.
 - If you hit a limit, everyone goes quiet until it resets. Nothing is charged.
 
 The helper is a small program that runs **on your computer, only while you start it**. The village page sends your messages to it, it asks Claude Code to answer as Marshall or the townsperson you're talking to, and it sends the reply back. Everyone can only talk: all of Claude Code's tools are switched off.
@@ -33,8 +33,9 @@ node helper/marshall-helper.js
 3. Press **M** (or the **Deputy** button) from anywhere to talk to Marshall and give orders. Marshall hands each order to the right townspeople, at most 3 at a time. If an order needs more, Marshall says so and a **Send next batch** button appears.
 4. Press **L** (or **Chat Log**) to see the hand-offs and reports on the left as they happen. Townspeople with a task walk home and work at their desk until they report back.
 5. Walk up to any townsperson and press **T** to chat with them on the right. They answer in their own personality and know their job and notes.
-6. Press **To-Do** in the toolbar to add tasks to your to-do list. Marshall hands each one to the right townsperson; when it's done it's crossed off, and hovering over it shows exactly what was done.
-7. **Esc** or **×** closes a box. When you're done, press **Ctrl+C** in the terminal to stop the helper.
+6. Townspeople can hand work to their **worker** (a horse on Sonnet 5.5) and check it before it's done, sending it back with notes if needed. Tell a townsperson "give this to your worker" and they always will.
+7. Press **To-Do** in the toolbar to add tasks to your to-do list. Marshall hands each one to the right townsperson; when it's done it's crossed off with who did it and who checked it, and hovering over it shows the instructions, any send-back notes and the finished work.
+8. **Esc** or **×** closes a box. When you're done, press **Ctrl+C** in the terminal to stop the helper.
 
 ## What the helper keeps
 

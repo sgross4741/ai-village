@@ -247,6 +247,7 @@
       if (!r.ok) throw new Error(j.error || 'Something went wrong.');
       sayIn(key, nameOf(who), j.reply);
       if (j.delegated && j.delegated.length) sayIn(key, '', `Handed to ${j.delegated.map(d => d.name).join(', ')}. Follow along in the chat log (L).`, 'note');
+      if (j.handedTo) sayIn(key, '', `${who.name.split(' ')[0]} handed it to ${j.handedTo} and will check the work. It's on your to-do list; follow along in the chat log (L).`, 'note');
       if (j.noted) sayIn(key, '', `${who.name.split(' ')[0]} added something to their notes.`, 'note');
       if (typeof j.pending === 'number') pendingBatches = j.pending;
       brainEl.textContent = 'Village brains: connected'; brainEl.classList.add('on');
@@ -298,12 +299,20 @@
   const todoEmpty = $('todo-empty'), todoTip = $('todo-tip');
   let todos = [], todosShown = '';
   const timeOf = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  const first = (n) => String(n || '').split(' ')[0];
+  const tries = (a) => a.tries > 1 ? ` (${a.tries} tries)` : '';
+  // "Done by Biscuit · checked by Clem", or "Done by Clem" when no worker was used
+  const whoDid = (a) => `Done by ${a.doneBy || a.name}${a.checkedBy ? ` · checked by ${first(a.checkedBy)}` : ''}${tries(a)}`;
   function stateLine(t) {
     if (t.status === 'choosing') return 'Marshall is choosing who should do it…';
     if (t.status === 'needs someone') return `Nobody in town fits yet. Marshall: ${t.note || ''}`;
     if (t.status === 'problem') return `Problem: ${t.note || 'something went wrong'}`;
-    const by = t.assignments.map(a => `${a.name}: ${a.status === 'done' ? 'done' : a.status === 'working' ? 'working on it' : a.status === 'problem' ? 'had a problem' : 'waiting their turn'}`);
-    return t.status === 'done' ? `Done by ${t.assignments.map(a => a.name).join(', ')} · ${timeOf(t.doneAt)}` : by.join(' · ');
+    const by = t.assignments.map(a => a.status === 'done' ? `${a.name}: done`
+      : a.status === 'with worker' ? `${a.worker} is working on it${a.tries ? ` (try ${a.tries + 1})` : ''}; ${first(a.name)} will check`
+      : a.status === 'checking' ? `${first(a.name)} is checking ${a.worker}'s work`
+      : a.status === 'sent back' ? `${first(a.name)} sent it back to ${a.worker} with notes`
+      : `${a.name}: ${a.status === 'working' ? 'working on it' : a.status === 'problem' ? 'had a problem' : 'waiting their turn'}`);
+    return t.status === 'done' ? t.assignments.map(whoDid).join(' · ') + ` · ${timeOf(t.doneAt)}` : by.join(' · ');
   }
   function tipText(t) {
     const lines = [];
@@ -312,8 +321,14 @@
     for (const a of t.assignments) {
       lines.push('');
       lines.push(`<b>${a.name}</b> · ${a.task}`);
-      if (a.status === 'done') lines.push(`${a.result || a.report || ''}`);
-      else lines.push(a.status === 'working' ? 'Working on it now…' : a.status === 'problem' ? `Problem: ${a.result || ''}` : 'Waiting their turn.');
+      if (a.worker || a.checkedBy) lines.push(`Handed to ${a.worker || a.doneBy}${a.instructions ? ` with these instructions: ${a.instructions}` : ''}`);
+      for (const [i, n] of (a.sendBacks || []).entries()) lines.push(`<b>Sent back ${i + 1}:</b> ${n}`);
+      if (a.status === 'done') {
+        lines.push(`<b>${whoDid(a)}</b>`);
+        if (a.work) { lines.push(''); lines.push(a.work); lines.push(''); }
+        if (a.checkedBy) lines.push(`<b>${first(a.checkedBy)}'s check:</b> ${a.result || ''}`);
+        else lines.push(`${a.result || a.report || ''}`);
+      } else lines.push(a.status === 'working' ? 'Working on it now…' : a.status === 'with worker' ? `${a.worker} is working on it now…` : a.status === 'checking' ? `${first(a.name)} is checking it now…` : a.status === 'sent back' ? `Back with ${a.worker} to fix…` : a.status === 'problem' ? `Problem: ${a.result || ''}` : 'Waiting their turn.');
     }
     if (!t.assignments.length && t.note) { lines.push(''); lines.push(`Marshall: ${t.note}`); }
     return lines.map(l => l.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/&lt;(\/?)b&gt;/g, '<$1b>')).join('\n');
