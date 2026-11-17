@@ -206,12 +206,16 @@
     sub.className = 'sub';
     sub.textContent = withWho === 'marshall' ? 'Your Deputy: give orders here' : withWho.area;
     chatTitle.appendChild(sub);
+    if (withWho !== 'marshall' && withWho.isCandidate && !transcripts.has(withWho.key)) {
+      sayIn(withWho.key, '', `${withWho.name} is a candidate Marshall found to work for ${withWho.boss.name}. Ask them anything, then decide below. Nobody is hired without your yes.`, 'system');
+    }
     if (withWho !== 'marshall' && withWho.isWorker && !transcripts.has(withWho.key)) {
-      sayIn(withWho.key, '', `${withWho.name} is ${withWho.boss.name}'s worker. No brain and no tasks yet: tasks will come only from ${withWho.boss.name.split(' ')[0]}.`, 'system');
+      sayIn(withWho.key, '', `${withWho.name} is ${withWho.boss.name}'s worker and takes work only from ${withWho.boss.name.split(' ')[0]}.`, 'system');
     }
     chatLines.innerHTML = '';
     for (const l of transcripts.get(keyOf(withWho)) || []) addLine(chatLines, l.who, l.text, l.cls);
     chatEl.classList.remove('hidden');
+    updateHireRow();
     showStatus();
     state.keys = {};
     chatInput.placeholder = withWho === 'marshall' ? 'Give Marshall an order…' : `Say something to ${withWho.name.split(' ')[0]}…`;
@@ -255,8 +259,8 @@
     if (thinking === key) return;
     chatInput.value = '';
     sayIn(key, 'Sheriff', text);
-    if (who.isWorker) {                        // workers don't have brains yet: no call to the helper
-      sayIn(key, who.name, '*friendly whinny* (Workers don\'t have brains yet. Their tasks will come from ' + who.boss.name + '.)');
+    if (who.isWorker) {                        // workers take work only from their townsperson: no call to the helper
+      sayIn(key, who.name, `*friendly whinny* (${who.name} takes work only from ${who.boss.name}. To give them a job, tell ${who.boss.name.split(' ')[0]}: "give this to your worker".)`);
       return;
     }
     thinking = key; showStatus();
@@ -434,7 +438,8 @@
     if (e.code === 'KeyT') { e.preventDefault(); talkToNearest(); return; }
     if (e.code === 'KeyM') { e.preventDefault(); openChat('marshall'); return; }
     if (e.code === 'KeyL') { toggleLog(); return; }
-    if (e.key === 'Escape') { if (!todoEl.classList.contains('hidden')) closeTodo(); else closeChat(); return; }
+    if (e.key === 'Escape') { if (!noticesEl.classList.contains('hidden')) closeNotices(); else if (!todoEl.classList.contains('hidden')) closeTodo(); else closeChat(); return; }
+    if (e.code === 'KeyN') { toggleNotices(); return; }
     if (KEYMAP[e.code]) { state.keys[KEYMAP[e.code]] = true; e.preventDefault(); return; }
     if (e.key === '+' || e.key === '=') zoomStep(1);
     else if (e.key === '-' || e.key === '_') zoomStep(-1);
@@ -529,7 +534,10 @@
   const todoBtn = document.createElement('button');
   todoBtn.textContent = 'To-Do'; todoBtn.title = 'Your to-do list'; todoBtn.style.cssText = btnCss;
   todoBtn.addEventListener('click', () => { toggleTodo(); });
-  menuEl.append(todoBtn, meetBtn, workBtn, logBtn, deputyBtn);
+  const noticeBtn = document.createElement('button');
+  noticeBtn.textContent = 'Notices'; noticeBtn.title = 'What Marshall needs you for (shortcut: N)'; noticeBtn.style.cssText = btnCss;
+  noticeBtn.addEventListener('click', () => { toggleNotices(); noticeBtn.blur(); });
+  menuEl.append(noticeBtn, todoBtn, meetBtn, workBtn, logBtn, deputyBtn);
   document.body.appendChild(menuEl);
   whoEl.style.top = '58px';
 
@@ -631,6 +639,136 @@
   }
   setInterval(flushNotes, 20000);
 
+  // ---------- hiring: candidates at the town hall, and new workers ----------
+  // Marshall finds a candidate when a townsperson needs help (or you ask). They walk in
+  // on the south road and wait at the town hall. Walk up, press T and interview them;
+  // Hire or Not this one. Hired: they walk to their townsperson's yard and start work.
+  const hireRow = $('hire-row'), hireBtn = $('hire-yes'), passBtn = $('hire-no'), hireHint = $('hire-hint');
+  const deciding = new Set();
+  function candidateWaitTile() {
+    const avoid = [meetingSpots.sheriffSpot, meetingSpots.deputySpot].map(t => t.join(','));
+    for (const t of [[12, 2], [13, 2], [4, 2], [3, 2], [12, 3], [3, 3]]) if (freeInHall(...t) && !avoid.includes(t.join(','))) return t;
+    return meetingSpots.deputySpot;
+  }
+  const townsfolkOnly = () => people.filter(q => !q.isWorker && !q.isCandidate);
+  function sendAway(q) { q.leaving = true; q.goal = { scene: town, tile: nav.entry }; q.path = []; }
+  async function pollRoster() {
+    try {
+      const j = await (await fetch(HELPER + '/roster')).json();
+      for (const w of j.workers || []) {
+        if (people.some(q => q.key === w.key) || !townsfolkOnly().some(t => t.key === w.owner)) continue;
+        const a = makeWorker(w, people.length, town, townsfolkOnly(), null, people);
+        a.sheet = workerSheet; people.push(a);
+      }
+      const c = j.candidate;
+      if (c && !people.some(q => q.key === c.key) && townsfolkOnly().some(t => t.key === c.owner)) {
+        const a = makeCandidate(c, town, nav, hallRoom, candidateWaitTile(), townsfolkOnly());
+        a.sheet = workerSheet; people.push(a);
+      }
+      for (const q of people) if (q.isCandidate && !q.leaving && !deciding.has(q.key) && (!c || c.key !== q.key)) sendAway(q);
+    } catch { /* helper not running */ }
+  }
+  setInterval(pollRoster, 3000);
+  pollRoster();
+  function updateHireRow() {
+    const c = chatWith && chatWith !== 'marshall' && chatWith.isCandidate && !chatWith.leaving ? chatWith : null;
+    hireRow.classList.toggle('hidden', !c);
+    if (!c) return;
+    const here = state.scene === hallRoom && c.scene === hallRoom;
+    hireBtn.disabled = passBtn.disabled = !here || deciding.has(c.key);
+    hireHint.textContent = here ? `Hire ${c.name} to work for ${c.boss.name.split(' ')[0]}?` : `Interview ${c.name} at the town hall to decide.`;
+  }
+  async function decideCandidate(hire) {
+    const c = chatWith;
+    if (!c || !c.isCandidate || deciding.has(c.key)) return;
+    deciding.add(c.key); updateHireRow();
+    try {
+      const r = await fetch(HELPER + '/hire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: c.key, decision: hire ? 'hire' : 'pass' }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Something went wrong.');
+      if (j.hired) {
+        // the candidate becomes a worker and walks to their townsperson's yard
+        const keep = { scene: c.scene, x: c.x, y: c.y, dir: c.dir, stepTo: c.stepTo };
+        Object.assign(c, makeWorker(j.worker, people.length, town, townsfolkOnly(), { scene: c.scene, x: c.x, y: c.y }, people), keep,
+          { isCandidate: false, leaving: false, justHired: true, path: [], goal: null });
+        sayIn(c.key, '', `Hired! ${c.name} is heading to ${c.boss.name}'s house to start work.`, 'note');
+      } else {
+        sayIn(c.key, '', `${c.name} wasn't hired and is heading out of town.`, 'note');
+        sendAway(c);
+      }
+    } catch (err) { sayIn(c.key, '', String(err instanceof TypeError ? "The village helper isn't running." : err.message), 'problem'); }
+    deciding.delete(c.key); updateHireRow();
+  }
+  hireBtn.addEventListener('click', () => decideCandidate(true));
+  passBtn.addEventListener('click', () => decideCandidate(false));
+
+  // ---------- notices: everything Marshall needs you for ----------
+  // A count on the Notices button, a short pop-up for anything new, and a list.
+  // Click a notice to go to it. (Mac notifications come from the helper.)
+  const noticesEl = $('notices'), noticeList = $('notice-list'), noticeEmpty = $('notice-empty'), toastEl = $('toast'), macBtn = $('mac-toggle');
+  let notices = [], lastNoticeId = null, macOn = true, toastTimer = 0;
+  const NOTICE_LABEL = { candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
+  function openNotices() { noticesEl.classList.remove('hidden'); toastEl.style.display = 'none'; pollNotices(); }
+  function closeNotices() { noticesEl.classList.add('hidden'); }
+  function toggleNotices() { noticesEl.classList.contains('hidden') ? openNotices() : closeNotices(); }
+  $('notices-close').addEventListener('click', closeNotices);
+  $('notices-clear').addEventListener('click', async () => { try { await fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismissAll: true }) }); } catch { /* */ } pollNotices(); });
+  macBtn.addEventListener('click', async () => {
+    try { const r = await fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mac: !macOn }) }); macOn = (await r.json()).mac; } catch { /* */ }
+    renderNotices();
+  });
+  function goToNotice(n) {
+    const ref = n.ref || {};
+    closeNotices();
+    if (ref.candidate) {
+      // walk to the town hall, in front of the candidate (any arrow key takes back control)
+      const c = people.find(q => q.key === ref.candidate && q.isCandidate);
+      const t = c && c.goal ? [c.goal.tile[0], c.goal.tile[1] + 1] : candidateWaitTile();
+      state.player.auto = { scene: hallRoom, tile: freeInHall(...t) ? t : nearestFree(t, new Set()), face: 'up' };
+      return;
+    }
+    if (ref.todo) openTodo(); else if (ref.log) { if (logEl.classList.contains('hidden')) toggleLog(); } else openChat('marshall');
+    fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {});
+  }
+  function renderNotices() {
+    const open = notices.filter(n => n.open);
+    noticeBtn.textContent = open.length ? `Notices (${open.length})` : 'Notices';
+    noticeBtn.style.background = open.length ? '#b5652a' : '#7e4f2c';
+    macBtn.textContent = `Mac notifications: ${macOn ? 'On' : 'Off'}`;
+    noticeList.innerHTML = '';
+    for (const n of [...notices].reverse()) {
+      const li = document.createElement('li');
+      if (!n.open) li.className = 'seen';
+      const tag = document.createElement('span'); tag.className = 'tag ' + n.kind; tag.textContent = NOTICE_LABEL[n.kind] || 'News';
+      const txt = document.createElement('span'); txt.className = 'text'; txt.textContent = n.text;
+      const time = document.createElement('span'); time.className = 'time'; time.textContent = timeOf(n.time);
+      li.append(tag, txt, time);
+      li.addEventListener('click', () => goToNotice(n));
+      noticeList.appendChild(li);
+    }
+    noticeEmpty.style.display = notices.length ? 'none' : 'block';
+  }
+  function toast(n) {
+    toastEl.textContent = /^Marshall\b/.test(n.text) ? n.text : `Marshall: ${n.text}`;
+    toastEl.style.display = 'block';
+    toastEl.onclick = () => { toastEl.style.display = 'none'; goToNotice(n); };
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 7000);
+  }
+  async function pollNotices() {
+    try {
+      const j = await (await fetch(HELPER + '/notices')).json();
+      notices = j.notices || []; macOn = j.mac !== false;
+      $('mac-row').style.display = j.macAvailable ? '' : 'none';
+      const newest = notices.filter(n => n.open).reduce((m, n) => (n.id > (m ? m.id : 0) ? n : m), null);
+      if (lastNoticeId !== null && newest && newest.id > lastNoticeId) toast(newest);
+      lastNoticeId = Math.max(lastNoticeId || 0, ...notices.map(n => n.id));
+      renderNotices();
+    } catch { /* helper not running */ }
+  }
+  setInterval(pollNotices, 3000);
+  pollNotices();
+
   // ---------- each frame ----------
   function update(dt) {
     state.player.scene = state.scene;
@@ -650,6 +788,11 @@
       talkedToday, recordChat,
     };
     people.forEach((person, i) => updateTownsperson(person, i, dt, lifeCtx, people));
+    for (let i = people.length - 1; i >= 0; i--) if (people[i].gone) {     // a candidate who walked out of town
+      if (chatWith === people[i]) closeChat();
+      people.splice(i, 1);
+    }
+    updateHireRow();
 
     // the Sheriff walked into someone standing still: they step aside
     if (state.bump && state.bumpFor > 0.4) { stepAside(state.bump); state.bumpFor = 0; }

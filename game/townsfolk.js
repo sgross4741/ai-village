@@ -129,7 +129,14 @@ function createNav(town, getInterior) {
     if (scene !== town) { const d = roomDoor(scene); return x === d[0] && y >= scene.h - 3; }
     return town.buildings.some(b => x === b.door.x && y > b.door.y && y <= b.door.y + (b.kind === 'hall' ? 3 : 1));
   };
-  return { town, rooms, doorAtTile, passable, legTarget, roomDoor, idleTown, inYard, isDoorway, inFrontOfDoor };
+  // where visitors come into town: the walkway on the bottom row nearest the middle
+  let entry = [Math.floor(town.w / 2), town.h - 1];
+  for (let y = town.h - 1; y > town.h - 6; y--) {
+    const row = [];
+    for (let x = 0; x < town.w; x++) if (isWalkway(x, y) && !town.solidAt(x, y)) row.push(x);
+    if (row.length) { entry = [row.sort((a, b) => Math.abs(a - town.w / 2) - Math.abs(b - town.w / 2))[0], y]; break; }
+  }
+  return { town, rooms, doorAtTile, passable, legTarget, roomDoor, idleTown, inYard, isDoorway, inFrontOfDoor, entry };
 }
 
 // Who is where. Everyone holds exactly one square, plus the square they're
@@ -308,7 +315,7 @@ function updateTownsperson(p, i, dt, ctx, everyone) {
   const inDoorway = nav.isDoorway(p.scene, px, py) || nav.inFrontOfDoor(p.scene, px, py);
   // ("when I walk near someone": it starts when the Sheriff is walking, and lasts while they stay close)
   // (and while the Sheriff's chat box is open with them, they stay and face the Sheriff)
-  const nearSheriff = !ctx.meeting && !inDoorway && p.scene === sheriff.scene && (p.attending || ctx.sheriffWalking || ctx.chattingWith === p) && Math.hypot(p.x - sheriff.x, p.y - sheriff.y);
+  const nearSheriff = !ctx.meeting && !inDoorway && (!p.isCandidate || (p.waiting && !p.leaving)) && !p.justHired && p.scene === sheriff.scene && (p.attending || ctx.sheriffWalking || ctx.chattingWith === p) && Math.hypot(p.x - sheriff.x, p.y - sheriff.y);
   const range = ctx.chattingWith === p ? RELEASE_SHERIFF * 2 : (p.attending ? RELEASE_SHERIFF : NOTICE_SHERIFF);
   if (nearSheriff !== false && nearSheriff < range) {
     p.attending = true;
@@ -328,8 +335,17 @@ function updateTownsperson(p, i, dt, ctx, everyone) {
     return;
   }
 
+  // 2b. A candidate: walk to the town hall and wait for the interview (or walk out of town)
+  if (p.isCandidate) {
+    if (walk(p, dt, nav, occ, STROLL_SPEED) === 'arrived') {
+      p.moving = false;
+      if (p.leaving) p.gone = true; else { p.dir = 'down'; p.waiting = true; }   // waiting at the town hall
+    }
+    return;
+  }
+
   // 3. What should they be doing?
-  const mode = p.isWorker ? ((ctx.meeting || ctx.workTime || p.tasks.length) ? 'home' : 'free')   // a worker with a task works in the yard
+  const mode = p.isWorker ? ((ctx.meeting || ctx.workTime || p.tasks.length || p.justHired) ? 'home' : 'free')   // a worker with a task works in the yard; a new hire walks there first
     : ctx.meeting ? 'meeting' : (ctx.workTime || p.tasks.length) ? 'working' : 'free';
   if (mode !== p.mode) {
     if (p.mode === 'meeting') { p.leaveDelay = 2.5 + i * 0.7; p.leftSeat = p.meetSeat; p.meetSeat = null; }   // after a meeting: file out one by one
@@ -353,7 +369,7 @@ function updateTownsperson(p, i, dt, ctx, everyone) {
       p.goal = { scene: nav.town, tile: (open.length ? open : p.yardSpots)[Math.floor(p.rng() * (open.length || p.yardSpots.length))] };
       p.path = [];
     }
-    if (walk(p, dt, nav, occ, HURRY_SPEED) === 'arrived') { p.moving = false; p.dir = 'down'; }
+    if (walk(p, dt, nav, occ, p.justHired ? STROLL_SPEED : HURRY_SPEED) === 'arrived') { p.moving = false; p.dir = 'down'; p.justHired = false; }
     else if ((p.stuck || 0) > 3) { p.goal = null; p.stuck = 0; }   // that spot is taken: pick another
     return;
   }
@@ -400,23 +416,38 @@ function updateTownsperson(p, i, dt, ctx, everyone) {
 // ---------- the workers ----------
 // Each lives in their townsperson's yard (never in front of the door) and roams the whole town.
 function createWorkers(town, nav, townsfolk) {
-  return WORKERS.map((info, i) => {
-    const boss = townsfolk.find(t => t.key === info.owner);
-    const b = boss.building;
-    const r = rng(7100 + i * 37);
-    const yardSpots = boss.yardSpots.slice();
-    const takenByBoss = boss.scene === town ? tileKey(...tileOf(boss)) : '';
-    const open = yardSpots.filter(t => tileKey(...t) !== takenByBoss);
-    const spot = open[Math.floor(r() * open.length)];
-    return {
-      ...info, isWorker: true, boss, area: `Worker for ${boss.name.split(' ')[0]} (${boss.area})`,
-      house: boss.house, building: b, room: null, rng: r, yardSpots, roomSpots: [],
-      scene: town, ...centre(spot),
-      dir: 'down', moving: false, t: 0, path: [], goal: null,
-      mode: 'free', wait: 2 + r() * 4, seated: false, attending: false, chat: null,
-      tasks: [],                  // no tasks yet: tasks will come only from their townsperson
-    };
-  });
+  return WORKERS.map((info, i) => makeWorker(info, i, town, townsfolk, null));
+}
+// one worker; `at` = {scene, x, y} to start somewhere else (a new hire leaving the town hall)
+function makeWorker(info, i, town, townsfolk, at, everyone) {
+  const boss = townsfolk.find(t => t.key === info.owner);
+  const r = rng(7100 + i * 37);
+  const yardSpots = boss.yardSpots.slice();
+  const taken = new Set((everyone || [boss]).filter(q => q.scene === town).map(q => tileKey(...tileOf(q))));
+  const open = yardSpots.filter(t => !taken.has(tileKey(...t)));
+  const spot = (open.length ? open : yardSpots)[Math.floor(r() * (open.length || yardSpots.length))];
+  return {
+    ...info, isWorker: true, boss, area: `Worker for ${boss.name.split(' ')[0]} (${boss.area})`,
+    house: boss.house, building: boss.building, room: null, rng: r, yardSpots, roomSpots: [],
+    ...(at || { scene: town, ...centre(spot) }),
+    dir: 'down', moving: false, t: 0, path: [], goal: null,
+    mode: 'free', wait: 2 + r() * 4, seated: false, attending: false, chat: null,
+    tasks: [],                  // tasks come only from their townsperson
+  };
+}
+
+// A candidate Marshall found: walks in on the south road to the town hall and waits there
+// for the Sheriff's interview. Not hired: walks back out of town.
+function makeCandidate(c, town, nav, hall, waitTile, townsfolk) {
+  const boss = townsfolk.find(t => t.key === c.owner);
+  const entry = nav.entry;
+  return {
+    key: c.key, name: c.name, owner: c.owner, isCandidate: true, boss,
+    area: `Candidate to work for ${boss ? boss.name.split(' ')[0] : 'a townsperson'} (${boss ? boss.area : ''})`,
+    building: null, room: null, rng: rng(5100 + c.key.length * 13), yardSpots: [], roomSpots: [],
+    scene: town, ...centre(entry), dir: 'up', moving: false, t: 0, path: [],
+    goal: { scene: hall, tile: waitTile }, mode: 'candidate', seated: false, attending: false, chat: null, tasks: [],
+  };
 }
 
 function pickWanderGoal(p, nav, occ) {

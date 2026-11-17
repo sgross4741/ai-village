@@ -75,6 +75,30 @@
     font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; pointer-events: none; white-space: pre-wrap;
   }
   #todo-tip b { color: #e8b84a; font-weight: normal; }
+  /* hiring: decide on a candidate in their chat box */
+  #hire-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; border-top: 2px solid #7e4f2c; }
+  #hire-row.hidden { display: none; }
+  #hire-hint { flex: 1 1 100%; font-size: 12px; color: #c9b496; }
+  #hire-yes { background: #4f7a2c; }
+  /* notices: what Marshall needs the Sheriff for */
+  #notices { top: 56px; left: 50%; transform: translateX(-50%); width: min(480px, calc(100vw - 48px)); max-height: calc(100vh - 170px); display: flex; flex-direction: column; padding: 0; z-index: 15; }
+  #notices.hidden { display: none; }
+  #notices header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 2px solid #7e4f2c; }
+  #notices header .title { flex: 1; font-weight: bold; color: #e8b84a; }
+  #notices header .sub { display: block; font-weight: normal; color: #c9b496; font-size: 12px; }
+  #mac-row { display: flex; gap: 6px; padding: 6px 10px; border-bottom: 2px solid #7e4f2c; }
+  .btn.small { font-size: 12px; padding: 2px 8px; }
+  #notice-list { list-style: none; margin: 0; padding: 4px 10px; overflow-y: auto; }
+  #notice-list li { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 6px 0; border-bottom: 1px dashed #5a3620; cursor: pointer; }
+  #notice-list li:hover .text { color: #fff; }
+  #notice-list li.seen { opacity: 0.55; }
+  #notice-list .tag { font-size: 11px; padding: 0 5px; border: 1px solid #7e4f2c; color: #e8b84a; }
+  #notice-list .tag.candidate, #notice-list .tag.batch, #notice-list .tag.draft { color: #a9cd62; border-color: #a9cd62; }
+  #notice-list .tag.problem, #notice-list .tag.nofit, #notice-list .tag.help { color: #e8a090; border-color: #e8a090; }
+  #notice-list .text { flex: 1 1 100%; order: 3; }
+  #notice-list .time { margin-left: auto; font-size: 11px; color: #8c765e; }
+  #notice-empty { color: #c9b496; font-size: 12px; padding: 8px 10px; }
+  #toast { bottom: 110px; left: 50%; transform: translateX(-50%); max-width: min(460px, calc(100vw - 48px)); display: none; cursor: pointer; z-index: 25; border-color: #e8b84a; }
 </style>
 </head>
 <body>
@@ -83,13 +107,14 @@
 <div id="help" class="panel">
   You are the <b>Sheriff</b> &nbsp;·&nbsp; <b>Arrows / WASD</b> walk &nbsp;·&nbsp; walk into a door to go in or out<br>
   <b>+ / −</b> or <b>mouse wheel</b> zoom &nbsp;·&nbsp; <b>0</b> Sheriff size &nbsp;·&nbsp; <b>F</b> whole town &nbsp;·&nbsp; <b>H</b> hide this<br>
-  <b>T</b> talk to whoever is next to you &nbsp;·&nbsp; <b>M</b> talk to Marshall &nbsp;·&nbsp; <b>L</b> chat log &nbsp;·&nbsp; <b>Esc</b> close
+  <b>T</b> talk to whoever is next to you &nbsp;·&nbsp; <b>M</b> talk to Marshall &nbsp;·&nbsp; <b>L</b> chat log &nbsp;·&nbsp; <b>N</b> notices &nbsp;·&nbsp; <b>Esc</b> close
 </div>
 <div id="brain" class="panel">Village brains: checking…</div>
 <div id="chat" class="panel side hidden">
   <header><span class="title" id="chat-title">Marshall</span><button class="x" id="chat-close" title="Close (Esc)">×</button></header>
   <div class="lines" id="chat-lines"></div>
   <button class="btn hidden" id="next-batch">Send next batch</button>
+  <div id="hire-row" class="hidden"><span id="hire-hint"></span><button class="btn" id="hire-yes">Hire</button><button class="btn" id="hire-no">Not this one</button></div>
   <form id="chat-form" autocomplete="off">
     <input id="chat-input" maxlength="2000" placeholder="Say something…">
     <button class="btn" type="submit">Send</button>
@@ -106,6 +131,13 @@
   <div id="todo-empty">Nothing on the list yet. Marshall hands each task to the right townsperson; hover over a finished one to see what was done.</div>
 </div>
 <div id="todo-tip"></div>
+<div id="notices" class="panel hidden">
+  <header><span class="title">Notices<span class="sub">What Marshall needs you for. Click one to go to it.</span></span><button class="x" id="notices-close" title="Close (Esc)">×</button></header>
+  <div id="mac-row"><button class="btn small" id="mac-toggle">Mac notifications: On</button><button class="btn small" id="notices-clear">Clear all</button></div>
+  <ul id="notice-list"></ul>
+  <div id="notice-empty">Nothing needs you right now.</div>
+</div>
+<div id="toast" class="panel"></div>
 <div id="log" class="panel side hidden">
   <header><span class="title">Chat log<span class="sub">Orders, hand-offs and reports</span></span><button class="x" id="log-close" title="Close (L)">×</button></header>
   <div class="lines" id="log-lines"></div>

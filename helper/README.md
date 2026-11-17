@@ -53,6 +53,22 @@ node helper/marshall-helper.js
 7. Press **To-Do** in the toolbar to add tasks to your to-do list. Marshall hands each one to the right townsperson; when it's done it's crossed off with who did it and who checked it, and hovering over it shows the instructions, any send-back notes and the finished work.
 8. **Esc** or **×** closes a box. When you're done, press **Ctrl+C** in the terminal to stop the helper.
 
+## Hiring new workers
+
+Marshall is always looking for ways to make the team better. When a townsperson says they need help (they can flag it when they report on work), or you ask Marshall ("find someone to help Clem"), Marshall finds one candidate: a horse with their own name, personality and strengths. They walk in on the south road and wait at the town hall.
+
+- **Interview them there:** walk up and press **T**, and ask anything. They answer in character (Sonnet 5.5, one Claude run per message).
+- **Decide:** press **Hire** or **Not this one** in their chat box (only in the town hall). Nobody is hired without your yes.
+- **Hired:** they get their own folder (`agents/<townsperson>/workers/<name>/`, with `INSTRUCTIONS.md` and `NOTES.md`), walk to their townsperson's yard and start working under them. The townsperson picks which worker gets each job; name one ("give this to Copper") to choose yourself.
+- **Not hired:** they walk out of town.
+- Limits: one candidate at a time; at most 3 workers per townsperson (what a yard fits); a townsperson asks for help at most once a day. Finding a candidate is one Claude run.
+
+## Notices
+
+Anything Marshall needs you for shows on the **Notices** button (or press **N**): a candidate waiting, finished work to send or save to Gmail, a batch waiting for your go-ahead, a to-do nobody fits, someone asking for help, or a problem. Click one to go to it (a candidate: you walk to the town hall). New ones pop up briefly at the bottom of the screen.
+
+On a Mac, the helper also shows them as **Mac notifications**, even when the village isn't open. Turn them off or on with the switch at the top of the Notices list.
+
 ## Gmail drafts (Rufus only)
 
 When Rufus finishes an email or letter (himself or through his worker Pepper), a **Save to Gmail drafts** button appears under it in Marshall's chat and on your to-do list. Press it and Rufus saves it as a draft in your Gmail, through the Gmail connector on your Claude account. You then check it in Gmail and press Send yourself.
@@ -70,6 +86,8 @@ Everything stays in `helper/marshall-home/` on your computer:
 - `village-log.jsonl`: the chat log (orders, hand-offs, reports).
 - `orders.json`: every task Marshall handed out, who got it, and whether they reported back.
 - `todos.json`: your to-do list, with who did each item and exactly what they did.
+- `hiring.json`: the candidate waiting at the town hall, and everyone interviewed so far.
+- `notices.json` and `settings.json`: Marshall's notices, and whether Mac notifications are on.
 - `runs-log.csv`: one line per Claude Code run (who, time taken, tokens), for the build log. The cost column is Claude Code's own estimate of what the same work would cost on the API. On your subscription, nothing is billed per use.
 - `sessions.json`: conversation ids, so everyone remembers earlier chats. Delete it to give everyone a fresh start.
 

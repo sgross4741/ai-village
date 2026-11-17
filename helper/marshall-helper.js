@@ -26,7 +26,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const PORT = Number(process.env.MARSHALL_PORT) || 7777;
 const MODEL = process.env.MARSHALL_MODEL || 'claude-opus-5-5';              // everyone runs on Opus 5.5
@@ -60,6 +60,10 @@ const LOG_FILE = path.join(HOME, 'village-log.jsonl');        // the chat log yo
 const TODOS_FILE = path.join(HOME, 'todos.json');             // the Sheriff's to-do list
 const RUNS_FILE = path.join(HOME, 'runs-log.csv');            // one line per Claude Code run, for the build log
 const ROOM = path.join(HOME, 'room');                         // empty folder Claude Code runs in
+const HIRING_FILE = path.join(HOME, 'hiring.json');           // the candidate waiting at the town hall, and past interviews
+const NOTICES_FILE = path.join(HOME, 'notices.json');         // things Marshall needs the Sheriff for
+const SETTINGS_FILE = path.join(HOME, 'settings.json');       // e.g. Mac notifications on/off
+const MAX_WORKERS = 3;           // workers per townsperson (what fits in a yard)
 fs.mkdirSync(ROOM, { recursive: true });
 
 const readJSON = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
@@ -95,7 +99,14 @@ function workers() {
   return list;
 }
 const workerInfo = (key) => workers().find(w => w.key === key) || null;
-const workerOf = (townsperson) => workers().find(w => w.owner === townsperson) || null;
+const workersOf = (townsperson) => workers().filter(w => w.owner === townsperson);
+// which worker gets a job: the one named in `text`, else one who's free, else the first
+function pickWorker(townsperson, text) {
+  const ws = workersOf(townsperson);
+  if (!ws.length) return null;
+  const named = ws.find(w => new RegExp('\\b' + w.name + '\\b', 'i').test(text || ''));
+  return named || ws.find(w => !working.has(w.key)) || ws[0];
+}
 const shortName = (key) => { const p = townspeople().find(t => t.key === key) || workerInfo(key); return p ? p.name : key; };
 
 // ---------- running Claude Code (your subscription, no tools) ----------
@@ -150,11 +161,11 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     const promptFile = path.join(HOME, `prompt-${agent}${tools ? '-tools' : ''}.md`);
     fs.writeFileSync(promptFile, systemPrompt);
     const build = () => {
-      const args = ['-p', message, '--model', isWorker ? WORKER_MODEL : MODEL, '--output-format', 'json',
+      const args = ['-p', message, '--model', opts.model || (isWorker ? WORKER_MODEL : MODEL), '--output-format', 'json',
         ...(tools ? ['--allowedTools', tools.join(','), '--disallowedTools', BLOCKED_TOOLS.join(',')] : ['--disallowedTools', '*']),
         '--permission-mode', 'dontAsk', '--max-turns', tools ? '4' : '2'];
       args.push(...(systemPromptFlag === 'append' ? ['--append-system-prompt-file', promptFile] : ['--system-prompt', systemPrompt]));
-      if (agent !== 'marshall' && !isWorker && !noAdvisor && ADVISOR !== 'none') args.push('--advisor', ADVISOR);
+      if (agent !== 'marshall' && !isWorker && !opts.model && !noAdvisor && ADVISOR !== 'none') args.push('--advisor', ADVISOR);
       if (s.sessionId) args.push('--resume', s.sessionId);
       return args;
     };
@@ -204,12 +215,12 @@ function tidy(t, max) {
 }
 function sayLine(text, max) {
   let say = grab(text, 'SAY');
-  if (!say) say = text.split('\n').filter(l => !/^\s*\**\s*(TASK|NOTE|DONE|WORKER|INSTRUCTIONS|WORK|VERDICT|CHECK|FIXED)\b/i.test(l)).join(' ');
+  if (!say) say = text.split('\n').filter(l => !new RegExp('^\\s*\\**\\s*(' + FIELDS + ')\\b', 'i').test(l)).join(' ');
   return tidy(say, max);
 }
 
 // a section that may run over several lines, up to the next answer line (keeps line breaks)
-const FIELDS = 'SAY|NOTE|DONE|TASK|WORKER|INSTRUCTIONS|WORK|VERDICT|CHECK|FIXED';
+const FIELDS = 'SAY|NOTE|DONE|TASK|WORKER|INSTRUCTIONS|WORK|VERDICT|CHECK|FIXED|HELP|HIRE|DRAFT|LINK|NAME|PERSONALITY|QUIRK|STRENGTHS|WHY';
 function block(text, key) {
   const re = new RegExp('^\\s*\\**\\s*' + key + '\\s*\\**\\s*:[ \\t]*([\\s\\S]*?)(?=^\\s*\\**\\s*(?:' + FIELDS + ')\\b[^\\n:]{0,20}\\**\\s*:|(?![\\s\\S]))', 'im');
   const m = text.match(re);
@@ -302,9 +313,16 @@ async function talkToMarshall(text) {
   const reply = sayLine(answer, 320);
   const tasks = parseTasks(answer, text);
   addLog('Marshall', 'Sheriff', reply);
+  for (const m of answer.matchAll(/^\s*\**\s*HIRE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
+    if (townspeople().some(t => t.key === m[1].toLowerCase())) requestHelp(m[1].toLowerCase(), tidy(m[2], 200), 'Sheriff');
+  }
   pending.push(...tasks);
   const sent = sendBatch();
-  if (pending.length) addLog('Marshall', 'Sheriff', `That's ${tasks.length} jobs. I've handed out ${sent.length}; ${pending.length} more wait for your go-ahead (Send next batch).`, 'system');
+  if (pending.length) {
+    addLog('Marshall', 'Sheriff', `That's ${tasks.length} jobs. I've handed out ${sent.length}; ${pending.length} more wait for your go-ahead (Send next batch).`, 'system');
+    resolveNotices(n => n.kind === 'batch');
+    addNotice('batch', `${pending.length} more job${pending.length > 1 ? 's' : ''} wait for your go-ahead (Send next batch).`, { chat: 'marshall' });
+  }
   return { reply, delegated: sent.map(t => ({ agent: t.agent, name: shortName(t.agent), task: t.task })), pending: pending.length };
 }
 
@@ -319,6 +337,7 @@ function sendBatch() {
     doTask(t).catch(e => {
       addLog(shortName(t.agent), 'Marshall', `(couldn't answer: ${e.message})`, 'problem');
       if (!t.todoId) addLog('Marshall', 'Sheriff', `${shortName(t.agent)} couldn't finish "${t.task}": ${e.message}`, 'problem', { chat: 'marshall' });
+      addNotice('problem', `${shortName(t.agent)} couldn't finish "${clip(t.task, 80)}": ${clip(e.message, 160)}`, { log: true });
       working.delete(t.agent);
       if (t.todoId) updateAssignment(t, { status: 'problem', result: e.message });
     });
@@ -342,6 +361,8 @@ function updateAssignment(t, change) {
   if (todo.assignments.length && todo.assignments.every(x => x.status === 'done')) {
     todo.status = 'done'; todo.doneAt = new Date().toISOString();
     addLog('Marshall', 'Sheriff', `Done: "${todo.text}". It's crossed off your to-do list; hover over it to see what was done.`, 'system', { chat: 'marshall' });
+    const draft = todo.assignments.find(a => a.draftId);
+    addNotice(draft ? 'draft' : 'done', draft ? `To-do done: "${clip(todo.text, 80)}". Want it in your Gmail drafts?` : `To-do done: "${clip(todo.text, 100)}"`, { todo: todo.id, draftId: draft ? draft.draftId : null });
   } else if (todo.assignments.some(x => x.status === 'working' || x.status === 'done')) todo.status = 'working';
   saveTodos(todos);
 }
@@ -355,6 +376,7 @@ function addTodo(text) {
     const all = loadTodos(), t = all.find(x => x.id === todo.id);
     if (t) { t.status = 'problem'; t.note = e.message; saveTodos(all); }
     addLog('Marshall', 'Sheriff', `(couldn't handle the to-do: ${e.message})`, 'problem');
+    addNotice('problem', `Marshall couldn't handle your to-do "${clip(text, 80)}": ${clip(e.message, 160)}`, { todo: todo.id });
   });
   return todo;
 }
@@ -367,7 +389,7 @@ async function handleTodo(id) {
   const tasks = parseTasks(answer, todo.text, { todoId: id });
   addLog('Marshall', 'Sheriff', reply);
   const all = loadTodos(), t = all.find(x => x.id === id);
-  if (!tasks.length) { t.status = 'needs someone'; t.note = reply; saveTodos(all); return; }
+  if (!tasks.length) { t.status = 'needs someone'; t.note = reply; saveTodos(all); addNotice('nofit', `Nobody in town fits your to-do "${clip(todo.text, 80)}". ${clip(reply, 160)}`, { todo: id }); return; }
   t.status = 'handed out'; t.note = reply;
   t.assignments = tasks.map(x => ({ agent: x.agent, name: shortName(x.agent), task: x.task, status: 'waiting' }));
   saveTodos(all);
@@ -381,8 +403,9 @@ function townspersonPrompt(agent) {
   const dir = path.join(AGENTS, agent);
   const instructions = fs.readFileSync(path.join(dir, 'INSTRUCTIONS.md'), 'utf8');
   const notes = fs.existsSync(path.join(dir, 'NOTES.md')) ? fs.readFileSync(path.join(dir, 'NOTES.md'), 'utf8') : '';
+  const crew = workersOf(agent);
   return `${instructions}
-
+${crew.length ? `\n## Your workers right now\n${crew.map(w => `- ${w.name}`).join('\n')}\n` : ''}
 ## How you talk
 - Stay in character as yourself, a townsperson in an 1880s frontier town, and in your own area.
 - Your SAY line: one to three short sentences, under 60 words. Plain words, no lists, no formatting.
@@ -399,10 +422,10 @@ NOTE: one short thing worth remembering from this conversation for your notes, o
 ${notes}`;
 }
 
-const wantsWorker = (text, w) => !!w && (/\b(give|hand|pass|send|let|have|get)\b[^.?!]*\b(your )?(worker|horse|intern)\b/i.test(text) || new RegExp('\\b' + w.name + '\\b', 'i').test(text));
+const wantsWorker = (text, w) => !!w && (/\b(give|hand|pass|send|let|have|get)\b[^.?!]*\b(your )?(worker|horse|intern)s?\b/i.test(text) || workersOf(w.owner).some(x => new RegExp('\\b' + x.name + '\\b', 'i').test(text)));
 
 async function talkToTownsperson(agent, text) {
-  const name = shortName(agent), w = workerOf(agent);
+  const name = shortName(agent), w = pickWorker(agent, text);
   addLog('Sheriff', name, text);
   const handOver = wantsWorker(text, w);
   const answer = await ask(agent, townspersonPrompt(agent), `The Sheriff walks up and says to you: ${text}` + (handOver
@@ -427,20 +450,27 @@ async function talkToTownsperson(agent, text) {
   return { reply, noted, handedTo: w.name, todo: todo.id };
 }
 
+const HELP_ASK = `If you need more help (too much work, or your workers can't keep up), add: HELP: why, in one sentence. Otherwise leave it out.`;
 const YOURSELF = `WORK: the finished piece itself in full, if the task asks for something written (a letter, email, plan, list); leave this line out otherwise\nDONE: what you did, in up to 80 words, and anything the Sheriff still has to do (for example, send it).`;
 
 async function doTask(t) {
-  const name = shortName(t.agent), w = workerOf(t.agent);
+  const name = shortName(t.agent);
+  let w = pickWorker(t.agent, t.task);
   const toWorker = wantsWorker(t.task, w);
-  const how = !w ? `Do what you can and report back to Marshall. After your SAY line add:\n${YOURSELF}`
-    : `Your worker ${w.name} (a horse, an intern on Sonnet 5.5) can take on clear, self-contained pieces of work: drafts, lists, summaries, write-ups. You check everything ${w.name} does before it counts as done.\n` +
+  const crew = workersOf(t.agent);
+  const crewLine = crew.length > 1 ? `Your workers: ${crew.map(x => x.name + (working.has(x.key) ? ' (busy right now)' : '')).join(', ')}. If one should do it, name them on the WORKER line, like "WORKER: yes, ${crew[0].name}".\n` : '';
+  const how = !w ? `Do what you can and report back to Marshall. After your SAY line add:\n${YOURSELF}\n${HELP_ASK}`
+    : `Your worker ${w.name} (a horse, an intern on Sonnet 5.5) can take on clear, self-contained pieces of work: drafts, lists, summaries, write-ups. You check everything ${w.name} does before it counts as done.\n` + crewLine +
       (toWorker ? `The Sheriff wants this given to ${w.name}: hand it over.\n` : `Decide whether ${w.name} can handle this one.\n`) +
       `If ${w.name} should do it, after your SAY line add:\nWORKER: yes\nINSTRUCTIONS: clear, complete instructions for ${w.name}: what to make, for whom, the key points, length and tone.\n` +
-      `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}`;
+      `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}\n${HELP_ASK}`;
   const answer = await ask(t.agent, townspersonPrompt(t.agent),
     `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}`);
   const reply = sayLine(answer, 400);
   noteFrom(t.agent, answer);
+  askedForHelp(t.agent, answer);
+  const chosen = crew.find(x => new RegExp('\\b' + x.name + '\\b', 'i').test(grab(answer, 'WORKER')));
+  if (chosen) w = chosen;
   const instructions = block(answer, 'INSTRUCTIONS') || (toWorker ? t.task : '');
   if (w && instructions && (toWorker || /^\W*yes/i.test(grab(answer, 'WORKER')))) {
     addLog(name, 'Marshall', reply);
@@ -477,8 +507,9 @@ async function workerLoop(t, w, instructions) {
       const cAnswer = await ask(t.agent, townspersonPrompt(t.agent),
         `${w.name} hands back their work${tries > 1 ? ` (try ${tries})` : ''} on: ${t.task}\nYour instructions were: ${instructions}\n\n${w.name}'s work:\n${work}\n\n` +
         `Check it carefully against your instructions and what the Sheriff needs. After your SAY line add:\nVERDICT: approved, or send back\nCHECK: if approved, what you checked and why it's good; if not, exactly what ${w.name} must fix.\n` +
-        (lastRound ? `This is the last try: if it still isn't good enough, fix it yourself and add FIXED: the finished version.\n` : '') + `Then your NOTE line.`);
+        (lastRound ? `This is the last try: if it still isn't good enough, fix it yourself and add FIXED: the finished version.\n` : '') + `${HELP_ASK}\nThen your NOTE line.`);
       noteFrom(t.agent, cAnswer);
+      askedForHelp(t.agent, cAnswer);
       const verdict = grab(cAnswer, 'VERDICT');
       const check = tidy(block(cAnswer, 'CHECK') || sayLine(cAnswer, 300), 700);
       const approved = /approv|good to go|accept|pass/i.test(verdict) && !/send\s*back|not approv|reject/i.test(verdict);
@@ -516,6 +547,8 @@ function reportToSheriff(t, r, draftId) {
   const first = (n) => String(n || '').split(' ')[0];
   const who = r.checkedBy ? `${r.doneBy} did it and ${first(r.checkedBy)} checked it` : `${r.doneBy} did it`;
   let text = `Done: ${t.task} ${who}${r.tries > 1 ? ` (${r.tries} tries)` : ''}. ${r.done || ''}`.trim();
+  const kind = draftId ? 'draft' : r.work && NEEDS_SENDING.test(t.order + ' ' + t.task) ? 'send' : 'done';
+  addNotice(kind, kind === 'draft' ? `${shortName(t.agent).split(' ')[0]} finished "${clip(t.task, 80)}". Want it in your Gmail drafts?` : kind === 'send' ? `"${clip(t.task, 80)}" is ready for you to send.` : `Done: ${clip(t.task, 100)}`, { chat: 'marshall', draftId: draftId || null });
   if (draftId) text += ` Want it in your Gmail drafts? Press "Save to Gmail drafts" and ${shortName(t.agent).split(' ')[0]} will put it there for you to check and send.`;
   else if (r.work && NEEDS_SENDING.test(t.order + ' ' + t.task)) text += ' Nobody in town can send things, so here it is for you to copy and send.';
   addLog('Marshall', 'Sheriff', text, 'relay', { chat: 'marshall', work: r.work || null, draftId: draftId || null });
@@ -560,8 +593,167 @@ LINK: the draft's link if the tool gave one, or none`,
     ? { status: 'saved', link, time: new Date().toISOString() }
     : { status: 'not saved', reason: tidy(grab(answer, 'DRAFT') || answer || 'no reply', 300) + (denied.length ? ` (blocked tools: ${[...new Set(denied)].join(', ')})` : ''), time: new Date().toISOString() };
   d.save(g);
+  if (saved) resolveNotices(n => n.ref && n.ref.draftId === draftId);
+  else addNotice('problem', `Rufus couldn't save it to your Gmail drafts: ${clip(g.reason, 160)}`, { log: true });
   addLog(name, 'Sheriff', saved ? `Saved to your Gmail drafts. Check it there and press Send when you're happy.${link ? ' ' + link : ''}` : `Couldn't save it to your Gmail drafts: ${g.reason}`, saved ? 'report' : 'problem', { chat: 'marshall' });
   return g;
+}
+
+// ---------- notices: anything Marshall needs to bring to the Sheriff's attention ----------
+const settings = () => ({ macNotifications: true, ...readJSON(SETTINGS_FILE, {}) });
+let noticeId = readJSON(NOTICES_FILE, []).reduce((m, n) => Math.max(m, n.id), 0);
+function addNotice(kind, text, ref) {
+  const all = readJSON(NOTICES_FILE, []);
+  const n = { id: ++noticeId, kind, text: tidy(text, 300), time: new Date().toISOString(), open: true, ref: ref || {} };
+  all.push(n);
+  writeJSON(NOTICES_FILE, all.slice(-150));
+  macNotify(n);
+  return n;
+}
+function resolveNotices(match) {
+  const all = readJSON(NOTICES_FILE, []);
+  let changed = false;
+  for (const n of all) if (n.open && match(n)) { n.open = false; changed = true; }
+  if (changed) writeJSON(NOTICES_FILE, all);
+}
+// a Mac notification (Notification Center), so the Sheriff hears even with the village closed
+const NOTICE_TITLES = { candidate: 'A candidate is waiting', draft: 'Ready for your Gmail drafts', send: 'Ready for you to send', done: 'Done', batch: 'Waiting for your go-ahead', nofit: 'Nobody fits', problem: 'A problem', help: 'Asking for help' };
+function macNotify(n) {
+  if (process.platform !== 'darwin' || !settings().macNotifications) return;
+  const q = (t) => '"' + String(t).replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  execFile('osascript', ['-e', `display notification ${q(clip(n.text, 200))} with title "My AI Village" subtitle ${q('Marshall: ' + (NOTICE_TITLES[n.kind] || 'News'))}`], () => {});
+}
+
+// ---------- hiring: Marshall finds candidates, the Sheriff interviews them at the town hall ----------
+const HORSE_NAMES = ['Sorrel', 'Blaze', 'Cinder', 'Apache', 'Copper', 'Ginger', 'Nutmeg', 'Saddle', 'Hazel', 'Dakota', 'Willow', 'Sage', 'Bandit', 'Rusty', 'Domino', 'Trapper', 'Banjo', 'Cricket', 'Penny', 'Whiskey', 'Marigold', 'Sundance', 'Thistle', 'Buckshot'];
+const loadHiring = () => ({ candidate: null, history: [], asked: {}, ...readJSON(HIRING_FILE, {}) });
+const saveHiring = (h) => writeJSON(HIRING_FILE, h);
+function takenKeys() {
+  const h = loadHiring();
+  return new Set(['marshall', 'sheriff', ...townspeople().map(t => t.key), ...workers().map(w => w.key), ...h.history.map(x => x.key), ...(h.candidate ? [h.candidate.key] : [])]);
+}
+function askedForHelp(agent, answer) {
+  const why = grab(answer, 'HELP');
+  if (!isNone(why)) requestHelp(agent, tidy(why, 200), shortName(agent));
+}
+// someone needs help: Marshall looks for a candidate (one at a time; at most MAX_WORKERS each)
+function requestHelp(agent, reason, askedBy) {
+  const h = loadHiring(), name = shortName(agent), bySheriff = askedBy === 'Sheriff';
+  addLog(askedBy === name ? name : 'Sheriff', 'Marshall', `${bySheriff ? 'Find someone to help ' + name : 'I need help'}: ${reason}`, 'system');
+  if (h.candidate) {
+    if (bySheriff) addLog('Marshall', 'Sheriff', `One candidate at a time: ${h.candidate.name} is still waiting at the town hall.`, 'system', { chat: 'marshall' });
+    return;
+  }
+  if (workersOf(agent).length >= MAX_WORKERS) {
+    addNotice('help', `${name} asked for help (${reason}), but already has ${MAX_WORKERS} workers, all a yard fits.`, { chat: 'marshall' });
+    return;
+  }
+  if (!bySheriff && h.asked[agent] === today()) return;   // a townsperson asks at most once a day
+  h.asked[agent] = today(); saveHiring(h);
+  findCandidate(agent, reason).catch(e => {
+    addLog('Marshall', 'Sheriff', `I couldn't find a candidate for ${name}: ${e.message}`, 'problem', { chat: 'marshall' });
+    addNotice('problem', `Marshall couldn't find a candidate for ${name}: ${clip(e.message, 160)}`, { log: true });
+  });
+}
+async function findCandidate(agent, reason) {
+  const boss = townspeople().find(t => t.key === agent), taken = takenKeys();
+  const answer = await ask('marshall', marshallPrompt(),
+    `${boss.name} (${boss.area}) needs help: ${reason}\nFind ONE candidate to interview for a worker job under ${boss.name.split(' ')[0]}. Every worker is a hard-working brown horse with a beige saddle; give this one a distinct personality that suits the work. ` +
+    `Pick a one-word horse name nobody in town has (taken: ${[...taken].join(', ')}). Answer in exactly these lines:\n` +
+    `SAY: one sentence telling the Sheriff who you found and that they're waiting at the town hall\nNAME: their name\nPERSONALITY: one sentence\nQUIRK: one short sentence\nSTRENGTHS: one sentence on what they're good at\nWHY: one sentence on why they suit ${boss.name.split(' ')[0]}'s work`);
+  let name = (grab(answer, 'NAME').match(/[A-Za-z]+/) || [''])[0];
+  name = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+  if (!/^[A-Z][a-z]{1,19}$/.test(name) || taken.has(name.toLowerCase())) name = HORSE_NAMES.find(n => !taken.has(n.toLowerCase())) || 'Newcomer';
+  const field = (k, d) => tidy(grab(answer, k) || d, 240);
+  const c = { key: name.toLowerCase(), name, owner: agent, ownerName: boss.name, area: boss.area, reason,
+    personality: field('PERSONALITY', 'Steady and eager to learn.'), quirk: field('QUIRK', 'Swishes their tail when thinking.'),
+    strengths: field('STRENGTHS', 'Careful, reliable work.'), why: field('WHY', `Can take routine work off ${boss.name.split(' ')[0]}'s hands.`), status: 'waiting', found: new Date().toISOString() };
+  const h = loadHiring(); h.candidate = c; saveHiring(h);
+  const said = sayLine(answer, 260);
+  addLog('Marshall', 'Sheriff', `${said && new RegExp('\\b' + name + '\\b').test(said) ? said : `I found ${name} to help ${boss.name}: ${c.strengths}`} ${name} is waiting at the town hall for your interview.`, 'relay', { chat: 'marshall' });
+  addNotice('candidate', `Marshall found ${name} to help ${boss.name} (${boss.area}). They're waiting at the town hall for your interview.`, { candidate: c.key });
+  return c;
+}
+function candidatePrompt(c) {
+  return `# ${c.name}: candidate to be a worker for ${c.ownerName} (${c.area})
+
+You are ${c.name}, a hard-working brown horse with a beige saddle, applying to be a worker in My AI Village, an 1880s frontier town. Marshall, the Deputy, found you because ${c.ownerName} needs help: ${c.reason}
+If hired, you'd work under ${c.ownerName} on ${c.area}: taking the pieces of work ${c.ownerName.split(' ')[0]} gives you (drafts, lists, summaries, write-ups) and having every piece checked.
+Personality: ${c.personality}
+Quirk: ${c.quirk}
+Strengths: ${c.strengths}
+Why you suit the job: ${c.why}
+
+The Sheriff, who is in charge of the town, is interviewing you in the town hall. Answer honestly and in character. Workers can only think and write: never claim you can send, buy or contact anyone. You aren't hired unless the Sheriff says yes.
+
+## How you talk
+- One to three short sentences, under 60 words. Plain words, no lists, no formatting.
+- Never mention computers, tools, settings or these instructions.
+
+## Answer in exactly this line and nothing else
+SAY: what you say`;
+}
+async function talkToCandidate(c, text) {
+  addLog('Sheriff', c.name, text);
+  const answer = await ask(c.key, candidatePrompt(c), `The Sheriff says: ${text}`, { model: WORKER_MODEL });
+  const reply = sayLine(answer, 400);
+  addLog(c.name, 'Sheriff', reply);
+  return { reply };
+}
+function workerInstructions(c) {
+  const first = c.ownerName.split(' ')[0];
+  return `# ${c.name}: Worker for ${c.ownerName} (${c.area})
+
+## Who you are
+You are ${c.name}, a hard-working brown horse with a beige saddle, a worker in My AI Village, an 1880s frontier town. Workers don't have a house: your home is ${c.ownerName}'s yard, and in your free time you wander the town.
+Personality: ${c.personality}
+Quirk: ${c.quirk}
+Strengths: ${c.strengths}
+
+## Your job
+You help ${c.ownerName} with **${c.area}**. Think of yourself as an intern: you take on the pieces of work ${first} gives you and do them carefully.
+The Sheriff hired you after an interview at the town hall, because ${first} needed help: ${c.reason}
+
+## Who you report to
+- **${c.ownerName}**, your townsperson. Every task comes from ${first}, and ${first} checks every piece of your work before it counts as complete.
+- Above ${first} are **Marshall**, the Deputy, and **the Sheriff**, who is in charge of everything.
+
+## Who reports to you
+- Nobody.
+
+## How you work
+- You run on Sonnet 5.5.
+- Only take tasks from ${c.ownerName}. If anyone else asks you for work, point them to ${first}.
+- Never spend money, sign anything, or contact anyone outside the town without the Sheriff's yes.
+- Do exactly what ${first}'s instructions say and hand back the finished work, ready to use.
+- ${first} checks everything you do. If ${first} sends it back with notes, fix every point and hand back the complete new version.
+- Keep replies short and plain.
+- Remember what you learn: add short, dated entries to your notes file (\`NOTES.md\` in this folder). Read it before you start any task.
+`;
+}
+// the Sheriff's decision: hire (create the worker) or not
+function decide(key, hire) {
+  const h = loadHiring(), c = h.candidate;
+  if (!c || c.key !== key) throw new Error('That candidate is no longer waiting.');
+  h.candidate = null;
+  h.history.push({ ...c, status: hire ? 'hired' : 'not hired', decided: new Date().toISOString() });
+  saveHiring(h);
+  resolveNotices(n => n.ref && n.ref.candidate === key);
+  if (!hire) {
+    addLog('Sheriff', 'Marshall', `Not ${c.name}.`, 'system');
+    addLog('Marshall', 'Sheriff', `Understood. ${c.name} heads out of town, and I'll keep looking when ${c.ownerName.split(' ')[0]} needs help.`, 'system', { chat: 'marshall' });
+    return { hired: false };
+  }
+  if (workersOf(c.owner).length >= MAX_WORKERS) throw new Error(`${c.ownerName} already has ${MAX_WORKERS} workers.`);
+  const dir = path.join(AGENTS, c.owner, 'workers', c.key);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'INSTRUCTIONS.md'), workerInstructions(c));
+  ensureNotes();
+  addNote(c.key, "What I've learned", `The Sheriff hired me after an interview at the town hall, to help ${c.ownerName} (${c.reason}).`);
+  addLog('Sheriff', 'Marshall', `Hire ${c.name}.`, 'system');
+  addLog('Marshall', 'Sheriff', `Done: ${c.name} is hired and heading to ${c.ownerName}'s house to start work.`, 'system', { chat: 'marshall' });
+  addLog('Marshall', c.ownerName, `Meet ${c.name}, your new worker. The Sheriff hired them to help you.`, 'task');
+  return { hired: true, worker: { key: c.key, name: c.name, owner: c.owner } };
 }
 
 // ---------- workers ----------
@@ -627,11 +819,13 @@ const server = http.createServer(async (req, res) => {
     const text = String(j.text || '').trim();
     if (!text) return send(400, { error: 'Empty message.' });
     if (text.length > MAX_MESSAGE_CHARS) return send(400, { error: `Messages are limited to ${MAX_MESSAGE_CHARS} characters.` });
-    if (agent !== 'marshall' && !townspeople().some(t => t.key === agent)) return send(400, { error: 'Unknown townsperson.' });
+    const cand = loadHiring().candidate;
+    const isCandidate = !!cand && cand.key === agent;
+    if (agent !== 'marshall' && !isCandidate && !townspeople().some(t => t.key === agent)) return send(400, { error: 'Unknown townsperson.' });
     if (busyAgents.has(agent)) return send(429, { error: 'Still thinking about your last message.' });
     busyAgents.add(agent);
     try {
-      send(200, agent === 'marshall' ? await talkToMarshall(text) : await talkToTownsperson(agent, text));
+      send(200, agent === 'marshall' ? await talkToMarshall(text) : isCandidate ? await talkToCandidate(cand, text) : await talkToTownsperson(agent, text));
     } catch (e) {
       console.log(`  problem: ${e.message}`);
       send(500, { error: e.message });
@@ -660,9 +854,31 @@ const server = http.createServer(async (req, res) => {
     finally { busyAgents.delete('gmail:' + id); }
     return;
   }
+  // who lives in town (workers come and go as the Sheriff hires them), and who's waiting at the town hall
+  if (req.method === 'GET' && url.pathname === '/roster') {
+    return send(200, { workers: workers().map(w => ({ key: w.key, name: w.name, owner: w.owner })), candidate: loadHiring().candidate });
+  }
+  if (req.method === 'POST' && url.pathname === '/hire') {
+    const j = await readBody(req, 1000);
+    try { return send(200, decide(String(j.key || ''), j.decision === 'hire')); }
+    catch (e) { return send(400, { error: e.message }); }
+  }
+  // notices: GET the list; POST { dismiss: id } / { dismissAll: true } / { mac: true|false }
+  if (req.method === 'GET' && url.pathname === '/notices') {
+    const all = readJSON(NOTICES_FILE, []);
+    return send(200, { notices: all.filter(n => n.open).concat(all.filter(n => !n.open).slice(-20)), mac: settings().macNotifications, macAvailable: process.platform === 'darwin' });
+  }
+  if (req.method === 'POST' && url.pathname === '/notices') {
+    const j = await readBody(req, 1000);
+    if (j.dismissAll) resolveNotices(n => n.kind !== 'candidate');
+    else if (j.dismiss) resolveNotices(n => n.id === Number(j.dismiss) && n.kind !== 'candidate');
+    if (typeof j.mac === 'boolean') writeJSON(SETTINGS_FILE, { ...settings(), macNotifications: j.mac });
+    return send(200, { ok: true, mac: settings().macNotifications });
+  }
   if (req.method === 'POST' && url.pathname === '/next-batch') {
     if (!pending.length) return send(200, { delegated: [], pending: 0 });
     const sent = sendBatch();
+    if (!pending.length) resolveNotices(n => n.kind === 'batch');
     addLog('Sheriff', 'Marshall', '(send the next batch)', 'system');
     return send(200, { delegated: sent.map(t => ({ agent: t.agent, name: shortName(t.agent), task: t.task })), pending: pending.length });
   }
