@@ -168,12 +168,49 @@
     if (who) { const w = document.createElement('span'); w.className = 'who'; w.textContent = who + ': '; line.appendChild(w); }
     if (cls === 'gmailbtn') { line.appendChild(gmailButton(text)); box.appendChild(line); box.scrollTop = box.scrollHeight; return; }
     // Gmail draft links are clickable; everything else is plain text
-    for (const [i, part] of text.split(/(https:\/\/mail\.google\.com\/\S+)/).entries()) {
-      if (i % 2) { const a = document.createElement('a'); a.href = part; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Open it in Gmail'; line.appendChild(a); }
+    if (cls === 'workshopbtn') { line.append(...workshopButtons(text)); box.appendChild(line); box.scrollTop = box.scrollHeight; return; }
+    for (const [i, part] of text.split(/(https:\/\/mail\.google\.com\/\S+|https:\/\/[a-z0-9-]+\.github\.io\/\S*)/).entries()) {
+      if (i % 2) { const a = document.createElement('a'); a.href = part; a.target = '_blank'; a.rel = 'noopener'; a.textContent = /mail\.google/.test(part) ? 'Open it in Gmail' : part; line.appendChild(a); }
       else if (part) line.appendChild(document.createTextNode(part));
     }
     box.appendChild(line);
     box.scrollTop = box.scrollHeight;
+  }
+  // The Workshop: Preview (a sealed-off tab) and Publish (the Sheriff's yes, websites only)
+  let workshopItems = {}, publishingReady = false;
+  async function pollWorkshop() {
+    try { const j = await (await fetch(HELPER + '/workshop')).json(); workshopItems = Object.fromEntries((j.items || []).map(x => [x.id, x])); publishingReady = !!j.publishing; } catch { /* helper not running */ }
+  }
+  const previewWorkshop = (id) => window.open(`${HELPER}/workshop/${id}/`, '_blank', 'noopener');
+  function workshopButtons(id) {
+    const item = workshopItems[id] || {};
+    const prev = document.createElement('button');
+    prev.className = 'btn gmail'; prev.textContent = 'Preview'; prev.title = 'Open it in a new tab';
+    prev.addEventListener('click', (e) => { e.stopPropagation(); previewWorkshop(id); });
+    const out = [prev];
+    if (item.published) {
+      const a = document.createElement('a'); a.href = item.published.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = ' Live at ' + item.published.url; a.style.fontSize = '12px';
+      out.push(a);
+    } else if (item.website !== false) {
+      const pub = document.createElement('button');
+      pub.className = 'btn gmail'; pub.textContent = 'Publish'; pub.title = 'Put it on your public GitHub Pages website';
+      pub.style.marginLeft = '6px';
+      pub.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await pollWorkshop();
+        if (!publishingReady) { alert("Website publishing isn't set up yet. On your Mac, double-click mac/Set Up Website Publishing.command once, then press Publish again."); return; }
+        if (!confirm('Publish this website? It will be public on the internet, on your GitHub Pages site.')) return;
+        pub.disabled = true; pub.textContent = 'Publishing…';
+        try {
+          const r = await fetch(HELPER + '/publish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error);
+          pub.textContent = 'Published'; await pollWorkshop(); pollTodos();
+        } catch (err) { pub.disabled = false; pub.textContent = 'Publish'; alert(`Couldn't publish: ${err instanceof TypeError ? "the village helper isn't running." : err.message}`); }
+      });
+      out.push(pub);
+    }
+    return out;
   }
   // "Save to Gmail drafts": the Sheriff's yes for Rufus to put a finished piece in their Gmail drafts
   function gmailButton(draftId) {
@@ -317,6 +354,7 @@
           sayIn('marshall', 'Marshall', e.text, e.kind === 'problem' ? 'problem' : '');
           if (e.work) sayIn('marshall', '', e.work, 'work');
           if (e.draftId) sayIn('marshall', '', e.draftId, 'gmailbtn');
+          if (e.workshop) pollWorkshop().then(() => sayIn('marshall', '', e.workshop, 'workshopbtn'));
         }
       }
       firstPoll = false;
@@ -370,7 +408,7 @@
     return lines.map(l => l.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/&lt;(\/?)b&gt;/g, '<$1b>')).join('\n');
   }
   function renderTodos() {
-    const shown = JSON.stringify(todos);
+    const shown = JSON.stringify(todos) + JSON.stringify(Object.values(workshopItems).map(x => [x.id, x.published && x.published.url]));
     if (shown === todosShown) return;
     todosShown = shown;
     todoList.innerHTML = '';
@@ -383,6 +421,7 @@
       const st = document.createElement('span'); st.className = 'state'; st.textContent = stateLine(t);
       text.append(label, st);
       for (const a of t.assignments) {
+        if (a.workshop) { const row = document.createElement('span'); row.className = 'state'; row.append(...workshopButtons(a.workshop.id)); text.append(row); }
         if (!a.draftId) continue;
         if (a.gmail && a.gmail.status === 'saved') {
           const g = document.createElement(a.gmail.link ? 'a' : 'span'); g.className = 'state';
@@ -425,7 +464,11 @@
     }
   });
   async function pollTodos() {
-    try { const r = await fetch(HELPER + '/todos'); todos = (await r.json()).todos || []; renderTodos(); } catch { /* helper not running */ }
+    try {
+      const r = await fetch(HELPER + '/todos'); todos = (await r.json()).todos || [];
+      if (todos.some(t => t.assignments.some(a => a.workshop))) await pollWorkshop();
+      renderTodos();
+    } catch { /* helper not running */ }
   }
   setInterval(pollTodos, 2000);
 
@@ -710,7 +753,7 @@
   // Click a notice to go to it. (Mac notifications come from the helper.)
   const noticesEl = $('notices'), noticeList = $('notice-list'), noticeEmpty = $('notice-empty'), toastEl = $('toast'), macBtn = $('mac-toggle');
   let notices = [], lastNoticeId = null, macOn = true, toastTimer = 0;
-  const NOTICE_LABEL = { candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
+  const NOTICE_LABEL = { workshop: 'Ready to preview', candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
   function openNotices() { noticesEl.classList.remove('hidden'); toastEl.style.display = 'none'; pollNotices(); }
   function closeNotices() { noticesEl.classList.add('hidden'); }
   function toggleNotices() { noticesEl.classList.contains('hidden') ? openNotices() : closeNotices(); }
@@ -730,6 +773,7 @@
       state.player.auto = { scene: hallRoom, tile: freeInHall(...t) ? t : nearestFree(t, new Set()), face: 'up' };
       return;
     }
+    if (ref.workshop) previewWorkshop(ref.workshop);
     if (ref.todo) openTodo(); else if (ref.log) { if (logEl.classList.contains('hidden')) toggleLog(); } else openChat('marshall');
     fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {});
   }

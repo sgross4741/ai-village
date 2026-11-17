@@ -69,6 +69,17 @@ Anything Marshall needs you for shows on the **Notices** button (or press **N**)
 
 On a Mac, the helper also shows them as **Mac notifications**, even when the village isn't open. Turn them off or on with the switch at the top of the Notices list.
 
+## The Workshop: websites, documents and spreadsheets
+
+When a task asks for something real to be made, such as "Create a website", the townsperson (or their worker) makes it as files, and their townsperson checks it like any other work. Agents still have no tools: they write the files in their answer and the helper saves them in the `workshop/` folder, accepting only simple web and text files (.html .css .js .svg .md .txt .csv .json) with plain names.
+
+- **Preview:** a Preview button appears in Marshall's chat, on your to-do list and in Notices. It opens the work in a new tab, sealed off so a previewed page can't press any village buttons.
+- **Publish (websites only):** press Publish and confirm. The helper puts the site on your free GitHub Pages website at `https://<your-github-name>.github.io/<site-name>/`. It's public, and it can take a minute or two to appear. Press Publish again later to update it.
+- Websites go to Ezra (Product), and Rufus can supply the words.
+- The `workshop/` folder stays on your computer (it isn't saved to the village's GitHub repository).
+
+**Set up publishing once:** double-click `mac/Set Up Website Publishing.command`. It installs GitHub's `gh` tool if needed (asking first), signs you in to GitHub in your browser, and creates one public repository for your websites, `<your-github-name>.github.io`, asking first.
+
 ## Gmail drafts (Rufus only)
 
 When Rufus finishes an email or letter (himself or through his worker Pepper), a **Save to Gmail drafts** button appears under it in Marshall's chat and on your to-do list. Press it and Rufus saves it as a draft in your Gmail, through the Gmail connector on your Claude account. You then check it in Gmail and press Send yourself.
@@ -87,7 +98,8 @@ Everything stays in `helper/marshall-home/` on your computer:
 - `orders.json`: every task Marshall handed out, who got it, and whether they reported back.
 - `todos.json`: your to-do list, with who did each item and exactly what they did.
 - `hiring.json`: the candidate waiting at the town hall, and everyone interviewed so far.
-- `notices.json` and `settings.json`: Marshall's notices, and whether Mac notifications are on.
+- `notices.json` and `settings.json`: Marshall's notices, whether Mac notifications are on, and where websites are published.
+- `workshop.json` and `pages-repo/`: what's in the workshop, and the copy of your website repository the Publish button uses.
 - `runs-log.csv`: one line per Claude Code run (who, time taken, tokens), for the build log. The cost column is Claude Code's own estimate of what the same work would cost on the API. On your subscription, nothing is billed per use.
 - `sessions.json`: conversation ids, so everyone remembers earlier chats. Delete it to give everyone a fresh start.
 

@@ -5,3 +5,6 @@ helper/marshall-home/
 
 # Everyone's notes (their memory) stay on your computer too
 agents/**/NOTES.md
+
+# Things the village makes (websites, documents) stay on your computer
+workshop/
