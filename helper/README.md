@@ -79,7 +79,7 @@ The General Store stands east of House 6, on the main street where it leads out 
 
 - **What gets made:** a website is `index.html`; a document, report, one-pager or **PDF** is a print-ready `document.html` (press **Save as PDF**); a spreadsheet is a `.csv` file (opens in Excel, Numbers or Google Sheets).
 - **Design:** for websites and documents, the makers follow Anthropic's free **frontend-design** Skill (in `agents/skills/`).
-- **Everything made is in the store:** walk in and press **T** (anywhere with nobody next to you). Search, filter by kind, pick one, and **Preview**, **Save as PDF**, **Download** a file or **Download all** (.zip), **Publish** (websites) or **Show in Finder**. Notices about finished work open it there too.
+- **Everything made is in the store:** press **G** from anywhere (again to close). Search, filter by kind, pick one, and **Preview**, **Save as PDF**, **Download** a file or **Download all** (.zip), **Publish** (websites) or **Show in Finder**. Notices about finished work open it there too.
 - Previews open in a sealed-off tab, so a previewed page can't press any village buttons.
 - **Publish (websites only):** confirm, and the helper puts the site on your free GitHub Pages website at `https://<your-github-name>.github.io/<site-name>/` (public; a minute or two to appear). Press Publish again later to update it.
 - The `workshop/` folder stays on your computer (it isn't saved to the village's GitHub repository).

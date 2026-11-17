@@ -196,6 +196,7 @@ How it works: everyone moves one square at a time and must claim the next square
 | 115 | 2026-11-17 | **Design Skill:** Anthropic's free frontend-design Skill (Apache 2.0) is copied into `agents/skills/` and added to the instructions whenever a website or document is made or checked. |
 | 116 | 2026-11-17 | **Meeting chat:** during a meeting, a resizable box on the left with everyone's picture and name. Starts on Everyone (one Claude run for the whole room; relevant people answer; Marshall can hand out work), or click one person. A+/A− make pictures and names bigger or smaller (remembered). |
 | 117 | 2026-11-17 | Publishing error "isn't set up yet": website publishing needs the one-time `mac/Set Up Website Publishing.command` on the Mac. |
+| 118 | 2026-11-17 | **G** opens and closes the General Store panel from anywhere (T inside the store is back to talking). While typing in any box (meeting chat, store search, chats, to-do), no keyboard shortcut or walking fires. |
 
 ## Build log
 

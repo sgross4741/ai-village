@@ -271,7 +271,6 @@
       const d = Math.hypot(q.x - me.x, q.y - me.y);
       if (d < best) { best = d; near = q; }
     }
-    if (!near && state.scene === storeRoom) { openStore(); return; }
     openChat(near || 'marshall');
   }
   $('chat-close').addEventListener('click', closeChat);
@@ -479,13 +478,20 @@
     ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
   };
   addEventListener('keydown', (e) => {
-    // while typing, keys go to the chat box, not the Sheriff
-    if (document.activeElement === chatInput) { if (e.key === 'Escape') closeChat(); return; }
-    if (document.activeElement === todoInput) { if (e.key === 'Escape') closeTodo(); return; }
+    // while typing in ANY box, keys go to that box: no shortcuts, no walking (Esc leaves the box)
+    const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (typing) {
+      if (e.key === 'Escape') {
+        const a = document.activeElement;
+        if (a === chatInput) closeChat(); else if (a === todoInput) closeTodo(); else if (a === $('store-search')) closeStore();
+        a.blur();
+      }
+      return;
+    }
     if (e.code === 'KeyT') { e.preventDefault(); talkToNearest(); return; }
+    if (e.code === 'KeyG') { e.preventDefault(); storeEl.classList.contains('hidden') ? openStore() : closeStore(); return; }
     if (e.code === 'KeyM') { e.preventDefault(); openChat('marshall'); return; }
     if (e.code === 'KeyL') { toggleLog(); return; }
-    if (document.activeElement === $('store-search') || document.activeElement === $('meet-input')) { if (e.key === 'Escape') { closeStore(); document.activeElement.blur(); } return; }
     if (e.key === 'Escape') { if (!storeEl.classList.contains('hidden')) closeStore(); else if (!noticesEl.classList.contains('hidden')) closeNotices(); else if (!todoEl.classList.contains('hidden')) closeTodo(); else closeChat(); return; }
     if (e.code === 'KeyN') { toggleNotices(); return; }
     if (KEYMAP[e.code]) { state.keys[KEYMAP[e.code]] = true; e.preventDefault(); return; }
