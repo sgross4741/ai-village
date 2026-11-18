@@ -165,7 +165,7 @@
     const line = document.createElement('p');
     if (cls) line.className = cls;
     if (time) { const t = document.createElement('span'); t.className = 'time'; t.textContent = time; line.appendChild(t); }
-    if (who) { const w = document.createElement('span'); w.className = 'who'; w.textContent = who + ': '; line.appendChild(w); }
+    if (who) { const w = document.createElement('span'); w.className = 'who' + (who === 'Sheriff' ? ' sheriff' : ''); w.textContent = who + ': '; line.appendChild(w); }
     if (cls === 'gmailbtn') { line.appendChild(gmailButton(text)); box.appendChild(line); box.scrollTop = box.scrollHeight; return; }
     // Gmail draft links are clickable; everything else is plain text
     if (cls === 'workshopbtn') { line.append(...workshopButtons(text)); box.appendChild(line); box.scrollTop = box.scrollHeight; return; }
@@ -191,6 +191,11 @@
     if (item.published) {
       const a = document.createElement('a'); a.href = item.published.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = ' Live at ' + item.published.url; a.style.fontSize = '12px';
       out.push(a);
+    } else if (item.website !== false && item.review && item.review.status !== 'approved') {
+      const rvb = document.createElement('button');
+      rvb.className = 'btn gmail'; rvb.textContent = item.supersededBy ? 'Newer version' : item.review.status === 'waiting' ? 'Review' : 'Being revised'; rvb.style.marginLeft = '6px';
+      rvb.addEventListener('click', (e) => { e.stopPropagation(); openStore(item.supersededBy || id); });
+      out.push(rvb);
     } else if (item.website !== false) {
       const pub = document.createElement('button');
       pub.className = 'btn gmail'; pub.textContent = 'Publish'; pub.title = 'Put it on your public GitHub Pages website';
@@ -788,7 +793,7 @@
   // Click a notice to go to it. (Mac notifications come from the helper.)
   const noticesEl = $('notices'), noticeList = $('notice-list'), noticeEmpty = $('notice-empty'), toastEl = $('toast'), macBtn = $('mac-toggle');
   let notices = [], lastNoticeId = null, macOn = true, toastTimer = 0;
-  const NOTICE_LABEL = { questions: 'Questions', proposals: 'Proposed to-dos', workshop: 'Ready to preview', candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
+  const NOTICE_LABEL = { questions: 'Questions', workshop: 'Needs your review', proposals: 'Proposed to-dos', candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
   function openNotices() { noticesEl.classList.remove('hidden'); toastEl.style.display = 'none'; pollNotices(); }
   function closeNotices() { noticesEl.classList.add('hidden'); }
   function toggleNotices() { noticesEl.classList.contains('hidden') ? openNotices() : closeNotices(); }
@@ -809,7 +814,7 @@
       return;
     }
     if (ref.questions) { openQuestions(); return; }
-    if (ref.workshop) { openStore(ref.workshop); fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {}); return; }
+    if (ref.workshop) { storeFilter = null; openStore(ref.workshop); return; }      // stays until you Approve or Request changes
     if (ref.todo) openTodo(); else if (ref.log) { if (logEl.classList.contains('hidden')) toggleLog(); } else openChat('marshall');
     fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismiss: n.id }) }).then(pollNotices, () => {});
   }
@@ -819,7 +824,9 @@
     noticeBtn.style.background = open.length ? '#b5652a' : '#7e4f2c';
     macBtn.textContent = `Mac notifications: ${macOn ? 'On' : 'Off'}`;
     noticeList.innerHTML = '';
-    for (const n of [...notices].reverse()) {
+    const RANK = { workshop: 0, candidate: 1, draft: 1, proposals: 2, questions: 2, batch: 2, help: 3, nofit: 3, problem: 3, send: 4, done: 5 };
+    const ordered = [...notices].sort((a, b) => (b.open - a.open) || ((RANK[a.kind] ?? 4) - (RANK[b.kind] ?? 4)) || (b.id - a.id));
+    for (const n of ordered) {
       const li = document.createElement('li');
       if (!n.open) li.className = 'seen';
       const tag = document.createElement('span'); tag.className = 'tag ' + n.kind; tag.textContent = NOTICE_LABEL[n.kind] || 'News';
@@ -863,14 +870,17 @@
     release(p) { for (const [k, q] of storeSeats) if (q === p) storeSeats.delete(k); },
   };
   const storeEl = $('store'), storeList = $('store-list'), storeDetail = $('store-detail'), storeSearch = $('store-search');
-  let storeFilter = 'all', storeSelected = null;
+  let storeFilter = null, storeSelected = null;
+  const reviewOf = (it) => (it.review && it.review.status) || 'waiting';
+  const needsReview = (it) => reviewOf(it) === 'waiting' && !it.supersededBy;
   const KIND_LABEL = { website: 'Website', document: 'Document', spreadsheet: 'Spreadsheet', other: 'Files' };
   const kindOf = (it) => it.kind || (it.website ? 'website' : 'other');
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
   async function openStore(id) {
     storeEl.classList.remove('hidden'); state.keys = {};
     await pollWorkshop();
-    if (id) storeSelected = id;
+    storeFilter = null;                                    // open on "Ready for approval" when anything is waiting
+    if (id) { storeSelected = id; if (workshopItems[id] && !needsReview(workshopItems[id])) storeFilter = 'all'; }
     renderStore();
   }
   function closeStore() { storeEl.classList.add('hidden'); }
@@ -879,17 +889,24 @@
   storeSearch.addEventListener('input', renderStore);
   for (const b of document.querySelectorAll('#store-filters button')) b.addEventListener('click', () => { storeFilter = b.dataset.kind; renderStore(); });
   function renderStore() {
-    for (const b of document.querySelectorAll('#store-filters button')) b.classList.toggle('on', b.dataset.kind === storeFilter);
+    const waiting = Object.values(workshopItems).filter(needsReview).length;
+    if (!storeFilter) storeFilter = waiting ? 'review' : 'all';           // open on what needs you
+    for (const b of document.querySelectorAll('#store-filters button')) {
+      b.classList.toggle('on', b.dataset.kind === storeFilter);
+      if (b.dataset.kind === 'review') b.textContent = waiting ? `Ready for approval (${waiting})` : 'Ready for approval';
+    }
     const q = storeSearch.value.trim().toLowerCase();
     const items = Object.values(workshopItems).sort((a, b) => b.created.localeCompare(a.created))
-      .filter(it => storeFilter === 'all' || kindOf(it) === storeFilter)
+      .filter(it => storeFilter === 'review' ? needsReview(it) : (storeFilter === 'all' || kindOf(it) === storeFilter))
       .filter(it => !q || (it.task + ' ' + it.files.join(' ') + ' ' + it.doneBy).toLowerCase().includes(q));
     storeList.innerHTML = '';
-    if (!items.length) storeList.append(el('li', 'empty', Object.keys(workshopItems).length ? 'Nothing matches.' : 'Nothing made yet. Ask for a website, a document or a spreadsheet, and it will be here.'));
+    if (!items.length) storeList.append(el('li', 'empty', storeFilter === 'review' ? 'Nothing is waiting for your approval.' : Object.keys(workshopItems).length ? 'Nothing matches.' : 'Nothing made yet. Ask for a website, a document or a spreadsheet, and it will be here.'));
     if (!items.some(it => it.id === storeSelected)) storeSelected = items.length ? items[0].id : null;
     for (const it of items) {
       const li = el('li', it.id === storeSelected ? 'on' : '');
-      li.append(el('span', 'kind ' + kindOf(it), KIND_LABEL[kindOf(it)]), el('span', 'name', it.task), el('span', 'meta', `${it.doneBy}${it.published ? ' · live' : ''}`));
+      const rs = it.supersededBy ? 'older version' : { waiting: 'needs your review', approved: 'approved', 'changes requested': 'changes requested' }[reviewOf(it)];
+      li.append(el('span', 'kind ' + kindOf(it), KIND_LABEL[kindOf(it)]), el('span', 'name', it.task),
+        el('span', 'meta', `${it.doneBy}${it.version > 1 ? ` · version ${it.version}` : ''}`), el('span', 'rev ' + (it.supersededBy ? 'old' : reviewOf(it).replace(' ', '-')), rs + (it.published ? ' · live' : '')));
       li.addEventListener('click', () => { storeSelected = it.id; renderStore(); });
       storeList.append(li);
     }
@@ -897,13 +914,47 @@
     const it = workshopItems[storeSelected];
     if (!it) return;
     storeDetail.append(el('h3', '', it.task));
-    storeDetail.append(el('p', 'meta', `${KIND_LABEL[kindOf(it)]} · made by ${it.doneBy}${it.checkedBy ? `, checked by ${it.checkedBy.split(' ')[0]}` : ''} · ${new Date(it.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
+    // the review: Approve, or Request changes with feedback (they revise it and it comes back here)
+    const rv = el('div', 'review ' + reviewOf(it).replace(' ', '-'));
+    if (it.supersededBy) {
+      rv.append(el('p', '', 'There is a newer version of this.'));
+      const go = el('button', 'btn', 'Go to the newer version'); go.addEventListener('click', () => { storeSelected = it.supersededBy; storeFilter = 'all'; renderStore(); }); rv.append(go);
+    } else if (reviewOf(it) === 'waiting') {
+      rv.append(el('h4', '', 'Ready for your approval'));
+      if (it.feedbackAnswered) rv.append(el('p', 'meta', `This version answers your feedback: “${it.feedbackAnswered}”`));
+      const row = el('div', 'actions');
+      const ok = el('button', 'btn primary', 'Approve'), no = el('button', 'btn', 'Request changes');
+      const fb = el('textarea'); fb.rows = 3; fb.placeholder = `What should ${it.doneBy.split(/[ ,]/)[0]} change? Be specific: they'll revise it and bring it back.`; fb.style.display = 'none';
+      const send = el('button', 'btn primary', 'Send back with feedback'); send.style.display = 'none';
+      const decide = async (approve) => {
+        ok.disabled = no.disabled = send.disabled = true;
+        try {
+          const r = await fetch(HELPER + '/workshop-review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: it.id, decision: approve ? 'approve' : 'changes', feedback: fb.value }) });
+          const j = await r.json(); if (!r.ok) throw new Error(j.error);
+        } catch (err) { alert(err instanceof TypeError ? "The village helper isn't running." : err.message); ok.disabled = no.disabled = send.disabled = false; return; }
+        await pollWorkshop();
+        // stay on this item after sending it back; after approving, go on to the next one waiting (if any)
+        storeFilter = !approve ? 'all' : (Object.values(workshopItems).some(needsReview) ? 'review' : 'all');
+        if (approve && storeFilter === 'review') storeSelected = null;
+        renderStore(); pollNotices(); pollTodos();
+      };
+      ok.addEventListener('click', () => decide(true));
+      no.addEventListener('click', () => { fb.style.display = send.style.display = ''; fb.focus(); });
+      send.addEventListener('click', () => decide(false));
+      row.append(ok, no); rv.append(row, fb, send);
+    } else if (reviewOf(it) === 'approved') {
+      rv.append(el('p', '', `Approved ${it.review.time ? new Date(it.review.time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : ''}.`));
+    } else {
+      rv.append(el('p', '', `You asked for changes: “${it.review.feedback.replace(/[.\s]+$/, '')}.” ${it.doneBy.split(/[ ,]/)[0]} is revising it; the new version will show up under Ready for approval.`));
+    }
+    storeDetail.append(rv);
+    storeDetail.append(el('p', 'meta', `${KIND_LABEL[kindOf(it)]}${it.version > 1 ? ` · version ${it.version}` : ''} · made by ${it.doneBy}${it.checkedBy ? `, checked by ${it.checkedBy.split(' ')[0]}` : ''} · ${new Date(it.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`));
     const acts = el('div', 'actions');
     const act = (label, title, fn, primary) => { const b = el('button', 'btn' + (primary ? ' primary' : ''), label); b.title = title; b.addEventListener('click', fn); acts.append(b); return b; };
     act('Preview', 'Open it in a new tab', () => previewWorkshop(it.id), true);
     if (kindOf(it) === 'document') act('Save as PDF', 'Opens the print window: choose "Save as PDF"', () => window.open(`${HELPER}/workshop/${it.id}/${encodeURIComponent(it.files.find(f => f.endsWith('.html')))}?print=1`, '_blank', 'noopener'));
     act('Download all', 'Every file, in one .zip', () => { location.href = `${HELPER}/workshop/${it.id}.zip`; });
-    if (kindOf(it) === 'website') for (const b of workshopButtons(it.id).slice(1)) acts.append(b);
+    if (kindOf(it) === 'website' && (reviewOf(it) === 'approved' || it.published)) for (const b of workshopButtons(it.id).slice(1)) acts.append(b);
     act('Show in Finder', 'Open its folder on your Mac', () => fetch(HELPER + '/workshop-reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: it.id }) }));
     storeDetail.append(acts);
     storeDetail.append(el('h4', '', 'Files'));
@@ -969,7 +1020,7 @@
     const p = el('p', l.cls || '');
     const a = l.key && whoByKey(l.key);
     if (a && l.key !== 'room') p.append(picFor(a));
-    if (l.who) p.append(el('span', 'who', l.who + ': '));
+    if (l.who) p.append(el('span', 'who' + (l.who === 'Sheriff' ? ' sheriff' : ''), l.who + ': '));
     p.append(document.createTextNode(l.text));
     meetLines.append(p); meetLines.scrollTop = meetLines.scrollHeight;
   }

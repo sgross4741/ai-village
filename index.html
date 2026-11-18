@@ -31,6 +31,7 @@
   .lines { flex: 1; overflow-y: auto; padding: 8px 10px; }
   .lines p { margin: 0 0 7px; }
   .lines .who { color: #e8b84a; }
+  .lines .who.sheriff, #meet-lines p .who.sheriff { color: #a9cd62; }
   .lines .to { color: #c9b496; }
   .lines .task .who { color: #a9cd62; }
   .lines .report .who { color: #9ac4e0; }
@@ -129,6 +130,16 @@
   #store-detail .files { list-style: none; margin: 0; padding: 0; }
   #store-detail .files li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px dashed #5a3620; }
   #store-detail .files .dl { font-size: 12px; }
+  #store-list .rev { grid-column: 2; font-size: 11px; color: #c9b496; }
+  #store-list .meta { grid-column: 2; }
+  #store-list .rev.waiting { color: #e8b84a; } #store-list .rev.approved { color: #a9cd62; } #store-list .rev.changes-requested { color: #e8a090; } #store-list .rev.old { color: #8c765e; }
+  #store-detail .review { margin: 10px 0 12px; padding: 10px 12px; border: 1px solid #7e4f2c; background: rgba(0, 0, 0, 0.2); }
+  #store-detail .review.waiting { border-color: #e8b84a; }
+  #store-detail .review.approved { border-color: #a9cd62; color: #a9cd62; }
+  #store-detail .review.changes-requested { border-color: #e8a090; }
+  #store-detail .review h4 { margin: 0 0 6px; color: #e8b84a; font-size: 13px; }
+  #store-detail .review p { margin: 0 0 8px; }
+  #store-detail .review textarea { width: 100%; box-sizing: border-box; margin: 8px 0 6px; font: inherit; color: #2e1d14; background: #f1e6c8; border: 2px solid #7e4f2c; padding: 6px 8px; resize: vertical; }
   #store a, #store a:visited { color: #9ac4e0; } #store a:hover { color: #fff; }
   /* the meeting chat: everyone in the room, with pictures; resizable */
   #meeting { left: 12px; top: 56px; width: 380px; height: calc(100vh - 170px); min-width: 280px; min-height: 260px; max-width: calc(100vw - 40px); max-height: calc(100vh - 70px);
@@ -216,7 +227,7 @@
   <header><span class="title">General Store<span class="sub">Everything made in the Workshop (G opens and closes this). Pick one to preview, download or publish it.</span></span><button class="btn small" id="store-library" title="Open the Village Library folder in Finder: reference files for the town">Village Library</button><button class="x" id="store-close" title="Close (Esc)">×</button></header>
   <div class="store-tools">
     <input id="store-search" placeholder="Search by name, file or maker…" autocomplete="off">
-    <div id="store-filters"><button class="chip on" data-kind="all">All</button><button class="chip" data-kind="website">Websites</button><button class="chip" data-kind="document">Documents</button><button class="chip" data-kind="spreadsheet">Spreadsheets</button><button class="chip" data-kind="other">Other</button></div>
+    <div id="store-filters"><button class="chip" data-kind="review">Ready for approval</button><button class="chip" data-kind="all">All</button><button class="chip" data-kind="website">Websites</button><button class="chip" data-kind="document">Documents</button><button class="chip" data-kind="spreadsheet">Spreadsheets</button><button class="chip" data-kind="other">Other</button></div>
   </div>
   <div class="store-body"><ul id="store-list"></ul><section id="store-detail"></section></div>
 </div>

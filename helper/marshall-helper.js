@@ -430,10 +430,15 @@ function saveToWorkshop(t, r) {
   const dir = path.join(WORKSHOP, id);
   fs.mkdirSync(dir, { recursive: true });
   for (const f of r.files) fs.writeFileSync(path.join(dir, f.name), f.body);
-  const slug = (t.task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'site') + '-' + id.slice(0, 4);
-  const item = { id, slug, task: t.task, order: t.order, agent: t.agent, doneBy: r.doneBy, checkedBy: r.checkedBy || null, files: r.files.map(f => f.name),
-    website: r.files.some(f => f.name === 'index.html'), kind: workshopKind(r.files.map(f => f.name)), created: new Date().toISOString(), published: null };
-  const all = readJSON(WORKSHOP_FILE, []); all.push(item); writeJSON(WORKSHOP_FILE, all);
+  const all = readJSON(WORKSHOP_FILE, []);
+  const prev = t.revise ? all.find(x => x.id === t.revise.id) : null;
+  const slug = prev ? prev.slug : (t.task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'site') + '-' + id.slice(0, 4);
+  const item = { id, slug, task: prev ? prev.task : t.task, order: t.order, agent: t.agent, doneBy: r.doneBy, checkedBy: r.checkedBy || null, files: r.files.map(f => f.name),
+    website: r.files.some(f => f.name === 'index.html'), kind: workshopKind(r.files.map(f => f.name)), created: new Date().toISOString(),
+    published: null, review: { status: 'waiting' }, version: prev ? (prev.version || 1) + 1 : 1, revisionOf: prev ? prev.id : null,
+    feedbackAnswered: t.revise ? t.revise.feedback : null };
+  if (prev) { prev.supersededBy = id; if (prev.published) item.publishedBefore = prev.published; }
+  all.push(item); writeJSON(WORKSHOP_FILE, all);
   return item;
 }
 
@@ -860,6 +865,7 @@ async function doTask(t) {
       `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}\n${HELP_ASK}`;
   const own = ownRun(t.agent);
   const answer = await ask(t.agent, own.prompt,
+    (t.revise ? `The Sheriff reviewed what you made and asked for changes.\nThe Sheriff's feedback: ${t.revise.feedback}\nRevise it (or have your worker revise it, with clear instructions that include this feedback). Hand back the complete new version of every file.\nThe current version:\n${t.revise.files}\n\n` : '') +
     `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}\n${MAKE_FILES}\nIf your worker makes the files, tell them so in your instructions, including which kind of file.${designGuide(t.order + ' ' + t.task)}`, own.opts);
   const reply = sayLine(answer, 400);
   noteFrom(t.agent, answer);
@@ -893,7 +899,7 @@ async function workerLoop(t, w, instructions) {
       addLog(boss, w.name, tries === 1 ? instructions : `Sent back: ${notes}`, tries === 1 ? 'task' : 'sendback');
       if (t.todoId && tries > 1) updateAssignment(t, { status: 'with worker', tries: tries - 1, sendBacks });
       const wAnswer = await ask(w.key, workerPrompt(w.key), tries === 1
-        ? `${first} gives you this task (from ${where}: "${t.task}").\nInstructions from ${first}: ${instructions}\n\nDo it now and hand back the finished work.${designGuide(t.order + ' ' + t.task + ' ' + instructions)}`
+        ? `${first} gives you this task (from ${where}: "${t.task}").\nInstructions from ${first}: ${instructions}\n\n${t.revise ? `This is a revision. The Sheriff's feedback: ${t.revise.feedback}\nThe current version:\n${t.revise.files}\n\n` : ''}Do it now and hand back the finished work.${designGuide(t.order + ' ' + t.task + ' ' + instructions)}`
         : `${first} checked your work and sent it back. Notes from ${first}: ${notes}\nFix every point and hand back the complete improved version.`);
       const made = takeFiles(wAnswer);
       if (made.files.length) files = made.files;
@@ -943,7 +949,7 @@ function finish(t, r, reply) {
     record.work = `${item.website ? 'A website' : 'Files'} in the workshop: ${item.files.join(', ')}.` + (r.work && !/^\s*(\[file: [^\]]+\]\s*)+$/.test(r.work) ? ` ${clip(r.work.replace(/\[file: [^\]]+\]\s*/g, ''), 600)}` : '');
     r.work = record.work;
     const what = { website: 'website', document: 'document', spreadsheet: 'spreadsheet', other: 'files' }[item.kind];
-    addNotice('workshop', `${r.doneBy}'s ${what}${r.checkedBy ? ` (checked by ${r.checkedBy.split(' ')[0]})` : ''} for "${clip(t.task, 70)}" ${what === 'files' ? 'are' : 'is'} ready in the General Store.`, { workshop: item.id, chat: t.todoId ? null : 'marshall', todo: t.todoId || null });
+    addNotice('workshop', `Ready for your review: ${r.doneBy}'s ${what}${r.checkedBy ? ` (checked by ${r.checkedBy.split(' ')[0]})` : ''} for "${clip(item.task, 70)}"${item.version > 1 ? `, version ${item.version}` : ''}. Approve it or request changes in the General Store.`, { workshop: item.id, chat: t.todoId ? null : 'marshall', todo: t.todoId || null });
   } else if (r.work && GMAIL_DRAFTERS.has(t.agent)) record.draftId = crypto.randomBytes(6).toString('hex');   // can be saved to Gmail drafts
   if (o) { Object.assign(o, { status: 'done', report: reply }, record); writeJSON(ORDERS_FILE, orders); }
   working.delete(t.agent);
@@ -1028,7 +1034,7 @@ function resolveNotices(match) {
   if (changed) writeJSON(NOTICES_FILE, all);
 }
 // a Mac notification (Notification Center), so the Sheriff hears even with the village closed
-const NOTICE_TITLES = { questions: 'Questions for you', proposals: 'Proposed to-dos', workshop: 'Ready to preview', published: 'Published', candidate: 'A candidate is waiting', draft: 'Ready for your Gmail drafts', send: 'Ready for you to send', done: 'Done', batch: 'Waiting for your go-ahead', nofit: 'Nobody fits', problem: 'A problem', help: 'Asking for help' };
+const NOTICE_TITLES = { workshop: 'Ready for your review', questions: 'Questions for you', proposals: 'Proposed to-dos', published: 'Published', candidate: 'A candidate is waiting', draft: 'Ready for your Gmail drafts', send: 'Ready for you to send', done: 'Done', batch: 'Waiting for your go-ahead', nofit: 'Nobody fits', problem: 'A problem', help: 'Asking for help' };
 function macNotify(n) {
   if (process.platform !== 'darwin' || !settings().macNotifications) return;
   const q = (t) => '"' + String(t).replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
@@ -1167,6 +1173,44 @@ function decide(key, hire) {
   return { hired: true, worker: { key: c.key, name: c.name, owner: c.owner } };
 }
 
+// ---------- reviewing what the Workshop made: Approve, or Request changes with feedback ----------
+function reviewWorkshop(id, approve, feedback) {
+  const all = readJSON(WORKSHOP_FILE, []), item = all.find(x => x.id === id);
+  if (!item) throw new Error('That piece of work is not in the workshop.');
+  if (item.supersededBy) throw new Error('There is a newer version of this; review that one.');
+  const maker = shortName(item.agent);
+  if (approve) {
+    item.review = { status: 'approved', time: new Date().toISOString() };
+    writeJSON(WORKSHOP_FILE, all);
+    resolveNotices(n => n.ref && n.ref.workshop === id);
+    addLog('Sheriff', maker, `Approved: ${item.task}${item.version > 1 ? ` (version ${item.version})` : ''}.`, 'check');
+    addNote(item.agent, "What I've learned", `The Sheriff approved my ${item.kind || 'work'} "${clip(item.task, 100)}"${item.version > 1 ? ` (version ${item.version})` : ''}.`);
+    return item;
+  }
+  feedback = String(feedback || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+  if (!feedback) throw new Error('Say what should change, so they know what to fix.');
+  item.review = { status: 'changes requested', feedback, time: new Date().toISOString() };
+  writeJSON(WORKSHOP_FILE, all);
+  resolveNotices(n => n.ref && n.ref.workshop === id);
+  addLog('Sheriff', maker, `Changes requested on "${item.task}": ${feedback}`, 'sendback');
+  addNote(item.agent, "What I've learned", `The Sheriff asked for changes to "${clip(item.task, 100)}": ${clip(feedback, 250)}`);
+  // the maker revises it: a to-do you can follow, through the usual hand-off and check
+  const files = filesText(item.files.filter(safeFileName).map(n => ({ name: n, body: fs.readFileSync(path.join(WORKSHOP, item.id, n), 'utf8') })), 40000);
+  const task = `Revise "${clip(item.task, 120)}" with the Sheriff's feedback`;
+  const todos = loadTodos();
+  const todo = { id: todos.reduce((m, x) => Math.max(m, x.id), 0) + 1, text: `Revise: ${clip(item.task, 160)}`, status: 'working', created: new Date().toISOString(), via: 'your review',
+    assignments: [{ agent: item.agent, name: maker, task, status: 'working' }] };
+  todos.push(todo); saveTodos(todos);
+  const t = { agent: item.agent, task, order: item.order || item.task, todoId: todo.id, revise: { id: item.id, feedback, files } };
+  working.set(item.agent, task);
+  doTask(t).catch(e => {
+    addLog(maker, 'Sheriff', `(couldn't revise it: ${e.message})`, 'problem');
+    working.delete(item.agent);
+    updateAssignment(t, { status: 'problem', result: e.message });
+  });
+  return item;
+}
+
 // ---------- publishing a workshop website to GitHub Pages (only with the Sheriff's yes) ----------
 // Set up once with mac/Set Up Website Publishing.command, which signs in to GitHub and creates
 // the website repository (settings.json: pages.repo / pages.url). The helper then publishes
@@ -1183,6 +1227,8 @@ async function publishSite(id) {
   const all = readJSON(WORKSHOP_FILE, []), item = all.find(x => x.id === id);
   if (!item) throw new Error('That piece of work is not in the workshop.');
   if (!item.website) throw new Error('Only websites can be published.');
+  if (item.supersededBy) throw new Error('There is a newer version of this website; publish that one.');
+  if (!item.review || item.review.status !== 'approved') throw new Error('Approve it first (Ready for approval, in the General Store), then publish.');
   if (publishing) throw new Error('Already publishing something; try again in a moment.');
   publishing = true;
   try {
@@ -1317,6 +1363,11 @@ const server = http.createServer(async (req, res) => {
     if (process.platform === 'darwin') execFile('open', [path.join(WORKSHOP, item.id)], () => {});
     return send(200, { ok: true, folder: path.join(WORKSHOP, item.id) });
   }
+  if (req.method === 'POST' && url.pathname === '/workshop-review') {
+    const j = await readBody(req, 6000);
+    try { return send(200, { item: reviewWorkshop(String(j.id || ''), j.decision === 'approve', j.feedback) }); }
+    catch (e) { return send(400, { error: e.message }); }
+  }
   if (req.method === 'POST' && url.pathname === '/publish') {
     const j = await readBody(req, 1000);
     try { return send(200, { published: await publishSite(String(j.id || '')) }); }
@@ -1438,8 +1489,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/notices') {
     const j = await readBody(req, 1000);
-    if (j.dismissAll) resolveNotices(n => n.kind !== 'candidate');
-    else if (j.dismiss) resolveNotices(n => n.id === Number(j.dismiss) && n.kind !== 'candidate');
+    const keep = (n) => n.kind === 'candidate' || n.kind === 'workshop';      // these stay until you decide
+    if (j.dismissAll) resolveNotices(n => !keep(n));
+    else if (j.dismiss) resolveNotices(n => n.id === Number(j.dismiss) && !keep(n));
     if (typeof j.mac === 'boolean') writeJSON(SETTINGS_FILE, { ...settings(), macNotifications: j.mac });
     return send(200, { ok: true, mac: settings().macNotifications });
   }
