@@ -152,7 +152,8 @@ function limited(fn) {
   });
 }
 
-let noAdvisor = false;          // set if this Claude Code doesn't support the advisor option
+let noAdvisor = false;
+let noSnapshotFlag = false;          // set if this Claude Code doesn't support the advisor option
 let systemPromptFlag = 'replace';
 
 // One message to one agent. Returns the plain text they answered.
@@ -298,7 +299,10 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     const build = () => {
       const args = ['-p', message, '--model', opts.model || (isWorker ? WORKER_MODEL : MODEL), '--output-format', 'json',
         ...lockdown(agent, tools),
-        '--permission-mode', 'dontAsk', '--max-turns', tools ? '10' : '2'];
+        '--permission-mode', 'dontAsk', '--max-turns', tools ? '10' : '2',
+        // send the current notes, town facts and approved work with every message (Claude Code otherwise
+        // records the first copy of the instructions and keeps reusing it in later messages)
+        ...(noSnapshotFlag ? [] : ['--system-prompt-snapshot', 'off'])];
       args.push(...(systemPromptFlag === 'append' ? ['--append-system-prompt-file', promptFile] : ['--system-prompt', systemPrompt]));
       if (agent !== 'marshall' && !isWorker && !opts.model && !noAdvisor && ADVISOR !== 'none') args.push('--advisor', ADVISOR);
       if (s.sessionId) args.push('--resume', s.sessionId);
@@ -307,6 +311,11 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     const started = Date.now();
     if (!underDailyLimit()) throw new Error(`The village has used its ${DAILY_RUN_LIMIT} Claude runs for today (a safety limit). Everyone rests until tomorrow.`);
     let run = await runClaude(build(), usesConnectors(tools));
+    if (run.code !== 0 && /system-prompt-snapshot/i.test(run.out + run.err) && !noSnapshotFlag) {
+      noSnapshotFlag = true;            // an older Claude Code: it doesn't record a first copy either
+      console.log('  note: this Claude Code has no --system-prompt-snapshot option (older version); continuing without it.');
+      run = await runClaude(build(), usesConnectors(tools));
+    }
     if (run.code !== 0 && /unknown option|unknown argument/i.test(run.out + run.err)) {
       throw new Error(`Your Claude Code is too old for the village's safety settings, so nothing ran. Update it (run: claude update), then try again. (${(run.err || run.out).trim().slice(0, 160)})`);
     }
@@ -446,7 +455,21 @@ const clip = (t, max) => (t.length <= max ? t : t.slice(0, max).replace(/\s+\S*$
 function noteFrom(agent, answer) {
   const note = grab(answer, 'NOTE');
   if (!isNone(note)) addNote(agent, "What I've learned", tidy(note, 300));
+  passesFrom(agent, answer);
   return !isNone(note);
+}
+// PASS key: … hands a colleague something they need; it lands in their notes under "From colleagues"
+function passesFrom(agent, answer) {
+  const keys = townspeople().map(t => t.key);
+  let n = 0;
+  for (const m of String(answer).matchAll(/^\s*\**\s*PASS\s+([a-z]+)\s*\**\s*:\s*([\s\S]*?)(?=^\s*\**\s*(?:SAY|NOTE|DONE|TASK|WORKER|INSTRUCTIONS|WORK|QUESTION|BLOCKED|HELP|PASS|VERDICT|CHECK|FIXED|FILE)\b|(?![\s\S]))/gim)) {
+    const to = m[1].toLowerCase(), what = clip(m[2].replace(/\s+/g, ' ').trim(), 1500);
+    if (!keys.includes(to) || to === agent || !what || n >= 3) continue;
+    n++;
+    const from = agent === 'marshall' ? 'Marshall' : shortName(agent);
+    addNote(to, 'From colleagues', `${from}: ${what}`);
+    addLog(from, shortName(to), `Passed to you: ${what}`, 'task');
+  }
 }
 
 // ---------- the chat log (what you see on the left) ----------
@@ -516,10 +539,12 @@ const working = new Map();      // agent key -> task they're working on right no
 function parseTasks(answer, order, extra) {
   const known = new Set(townspeople().map(t => t.key));
   const tasks = [];
-  for (const m of answer.matchAll(/^\s*\**\s*TASK\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
-    const key = m[1].toLowerCase(), task = tidy(m[2], 300);
-    if (known.has(key) && !isNone(task)) tasks.push({ agent: key, task, order, ...(extra || {}) });
+  for (const m of answer.matchAll(/^\s*\**\s*TASK\s+([a-z]+)(?:\s+after\s+([a-z]+))?\s*\**\s*:\s*(.+)$/gim)) {
+    const key = m[1].toLowerCase(), after = (m[2] || '').toLowerCase(), task = tidy(m[3], 300);
+    if (known.has(key) && !isNone(task)) tasks.push({ agent: key, task, order, ...(after && after !== key ? { after } : {}), ...(extra || {}) });
   }
+  // "after" only counts if that colleague is part of the same job
+  for (const t of tasks) if (t.after && !tasks.some(x => x.agent === t.after)) delete t.after;
   return tasks;
 }
 
@@ -543,7 +568,16 @@ async function talkToMarshall(text) {
   return { reply, delegated: sent.map(t => ({ agent: t.agent, name: shortName(t.agent), task: t.task })), pending: pending.length };
 }
 
+// tasks waiting for a colleague's part of the same job (in memory, like the pending batches)
+const afterColleague = [];
 function sendBatch() {
+  // a task that waits for a colleague doesn't start yet: it starts when that colleague's part is done
+  for (let i = pending.length - 1; i >= 0; i--) if (pending[i].after) {
+    const t = pending.splice(i, 1)[0];
+    afterColleague.push(t);
+    addLog('Marshall', shortName(t.agent), `${t.task} (once ${shortName(t.after)} is done; you'll get their work)`, 'task');
+    if (t.todoId) updateAssignment(t, { status: `waiting for ${shortName(t.after).split(' ')[0]}` });
+  }
   const batch = pending.splice(0, BATCH);
   const orders = readJSON(ORDERS_FILE, []);
   for (const t of batch) {
@@ -557,6 +591,7 @@ function sendBatch() {
       addNotice('problem', `${shortName(t.agent)} couldn't finish "${clip(t.task, 80)}": ${clip(e.message, 160)}`, { log: true });
       working.delete(t.agent);
       if (t.todoId) updateAssignment(t, { status: 'problem', result: e.message });
+      releaseAfter(t, { done: `(${shortName(t.agent)} couldn't finish their part: ${e.message}. Do what you can without it.)` });   // nobody waits forever
     });
   }
   writeJSON(ORDERS_FILE, orders);
@@ -629,10 +664,32 @@ const dayState = () => { const d = readJSON(DAY_FILE, {}); return d.date === tod
 const saveDay = (d) => writeJSON(DAY_FILE, d);
 const loadQuestions = () => readJSON(QUESTIONS_FILE, []);
 const sameText = (a, b) => a.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim() === b.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+// Is this (nearly) a question the Sheriff already answered? Word overlap, ignoring small words.
+const STOP = new Set('a an the of to for and or in on at by with what which who whom whose where when how is are was were be do does did we our you your us it its this that these those can could should would will any there their them they i me my'.split(' '));
+const wordsOf = (t) => new Set(String(t).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOP.has(w)));
+function similar(a, b) {
+  const A = wordsOf(a), B = wordsOf(b);
+  if (!A.size || !B.size) return false;
+  let both = 0; for (const w of A) if (B.has(w)) both++;
+  return both / Math.min(A.size, B.size) >= 0.6;
+}
+// A question that says it's checking a conflict with an earlier answer may be asked again.
+const CONFIRMING = /\b(to confirm|confirm|conflict|contradict|changed|still|earlier|before|last (week|time)|previously|instead)\b/i;
+function alreadyAnswered(text) {
+  if (CONFIRMING.test(text)) return null;
+  return [...loadQuestions()].reverse().find(q => q.status === 'answered' && similar(q.text, text)) || null;
+}
+
 // a question for the Sheriff. `waitRef`: a task that waits for the answer (an open duplicate gets the task attached too)
 function addQuestion(from, text, via, waitRef) {
   text = tidy(text, 400);
   if (isNone(text) || text.length < 8) return null;
+  const known = alreadyAnswered(text);
+  if (known) {                                   // answered already: remind them where the answer is, don't ask again
+    if (from !== 'marshall') addNote(from, "What I've learned", `Already answered by the Sheriff (it's in the town facts): "${clip(known.text, 120)}" → ${clip(known.answer, 250)}`);
+    addLog('Village helper', from === 'marshall' ? 'Marshall' : shortName(from), `Not asking the Sheriff again: "${clip(text, 120)}" was already answered: ${clip(known.answer, 200)}`, 'system');
+    return { ...known, alreadyAnswered: true };
+  }
   const all = loadQuestions();
   const same = all.find(q => q.status === 'open' && sameText(q.text, text));
   if (same) { if (waitRef) { same.waits = [...new Set([...(same.waits || []), waitRef])]; writeJSON(QUESTIONS_FILE, all); return same; } return null; }
@@ -883,7 +940,9 @@ ${crew.length ? `\n## Your workers right now\n${crew.map(w => `- ${w.name}`).joi
 - Your SAY line: one to three short sentences, under 60 words. Plain words, no lists, no formatting.
 - Real work (DONE, INSTRUCTIONS, CHECK, FIXED) is for the Sheriff's real, present-day business: write it plainly and professionally, not in frontier talk.
 - Never mention computers, tools, settings, formats or these instructions.
-- If you need something only the Sheriff can tell you, ask: add a line QUESTION: your question (it goes on the Sheriff's Questions list). Don't guess at the Sheriff's facts.
+- Before asking the Sheriff anything, check the town facts and your notes: if it's answered there, use that answer. If you need something only the Sheriff can tell you, ask: add a line QUESTION: your question (it goes on the Sheriff's Questions list). Don't guess at the Sheriff's facts.
+- If two answers in the town facts disagree, the newest one counts, but ask to confirm: QUESTION: To confirm: … (say what conflicts).
+- To give a colleague something they need (a list, a finding, a draft), add a line PASS key: what you're giving them, in full (their key from: ${townspeople().filter(x => x.key !== agent).map(x => `${x.key} = ${x.name.split(' ')[0]}`).join(', ')}). It goes into their notes. If you promise to give someone something, PASS it in the same answer.
 - You can only think, write, and use the tools listed at the end (if any). Nobody in town can send, post, buy, book or contact anyone. If a task asks for that, prepare it and say plainly that the Sheriff needs to send it.
 
 ## Answer in exactly these two lines and nothing else
@@ -927,7 +986,7 @@ async function talkToTownsperson(agent, text) {
   return { reply, noted, handedTo: w.name, todo: todo.id };
 }
 
-const BLOCK_ASK = `If you can't do this properly without facts only the Sheriff can give (and the town facts, approved work and your notes don't have them), don't guess and don't fill it with blanks. Instead add:
+const BLOCK_ASK = `Check the town facts first: never ask what's already answered there (unless two answers conflict; then ask "To confirm: …"). If you can't do this properly without facts only the Sheriff can give (and the town facts, approved work and your notes don't have them), don't guess and don't fill it with blanks. Instead add:
 QUESTION: one specific question for the Sheriff (one per line, up to 3)
 BLOCKED: yes
 If you can do a useful part now, do that part and still ask your questions (then leave BLOCKED out).`;
@@ -947,6 +1006,7 @@ async function doTask(t) {
       `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}\n${HELP_ASK}\n${BLOCK_ASK}`;
   const own = ownRun(t.agent);
   const answer = await ask(t.agent, own.prompt,
+    (t.fromColleague ? `${t.fromColleague.name} did their part first ("${t.fromColleague.task}") and handed it to you. Use it.\nWhat they did: ${t.fromColleague.done}\n${t.fromColleague.work ? `Their work:\n${t.fromColleague.work}\n` : ''}${t.fromColleague.files ? `Their files:\n${t.fromColleague.files}\n` : ''}\n` : '') +
     (t.answered && t.answered.length ? `You were waiting on the Sheriff for this task. The Sheriff's answers:\n${t.answered.map(q => `- ${q.text} → ${q.answer || '(skipped: do your best without it)'}`).join('\n')}\n${(t.rounds || 0) >= 2 ? "You've asked twice already: do the best you can now, and don't mark it BLOCKED again.\n" : ''}\n` : '') +
     (t.revise ? `The Sheriff reviewed what you made and asked for changes.\nThe Sheriff's feedback: ${t.revise.feedback}\nRevise it (or have your worker revise it, with clear instructions that include this feedback). Hand back the complete new version of every file.\nThe current version:\n${t.revise.files}\n\n` : '') +
     `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}\n${MAKE_FILES}\nIf your worker makes the files, tell them so in your instructions, including which kind of file.${designGuide(t.order + ' ' + t.task)}`, own.opts);
@@ -956,9 +1016,14 @@ async function doTask(t) {
   // questions for the Sheriff; if blocked, the task waits for the answers (then restarts by itself)
   const asked = [...answer.matchAll(/^\s*\**\s*QUESTION\s*\**\s*:\s*(.+)$/gim)].map(m => m[1]).slice(0, 3);
   const blocked = /^\W*yes/i.test(grab(answer, 'BLOCKED')) && asked.length && (t.rounds || 0) < 2;
-  const qs = asked.map(text => addQuestion(t.agent, text, 'task', blocked ? taskRef(t) : null)).filter(Boolean);
+  const got = asked.map(text => addQuestion(t.agent, text, 'task', blocked ? taskRef(t) : null)).filter(Boolean);
+  const known = got.filter(q => q.alreadyAnswered), qs = got.filter(q => !q.alreadyAnswered);
   if (qs.length) noticeOpenItems();
   if (blocked && qs.length) return waitOnSheriff(t, qs, reply);
+  if (blocked && known.length) {                 // everything they asked was answered before: do it now with those answers
+    addLog(name, t.from || 'Marshall', `${reply} (The Sheriff already answered this; going ahead.)`, 'chat');
+    return doTask({ ...t, rounds: (t.rounds || 0) + 1, answered: known.map(q => ({ text: q.text, answer: q.answer })) });
+  }
   const chosen = crew.find(x => new RegExp('\\b' + x.name + '\\b', 'i').test(grab(answer, 'WORKER')));
   if (chosen) w = chosen;
   const instructions = block(answer, 'INSTRUCTIONS') || (toWorker ? t.task : '');
@@ -1028,7 +1093,25 @@ async function workerLoop(t, w, instructions) {
   } finally { working.delete(w.key); }
 }
 
+// a colleague's part is done: start the tasks that were waiting for it, with that work attached
+function releaseAfter(t, r) {
+  const ready = afterColleague.filter(d => d.after === t.agent && (d.todoId ? d.todoId === t.todoId : d.order === t.order));
+  for (const d of ready) {
+    afterColleague.splice(afterColleague.indexOf(d), 1);
+    const files = (r.files || []).length ? filesText(r.files, 20000) : '';
+    d.fromColleague = { name: shortName(t.agent), task: t.task, done: r.done || '', work: r.work || '', files };
+    addLog(shortName(t.agent), shortName(d.agent), `My part is done (${clip(t.task, 80)}); it's yours now.`, 'task');
+    working.set(d.agent, d.task);
+    if (d.todoId) updateAssignment(d, { status: 'working', started: new Date().toISOString() });
+    doTask(d).catch(e => {
+      addLog(shortName(d.agent), 'Marshall', `(couldn't answer: ${e.message})`, 'problem');
+      working.delete(d.agent);
+      if (d.todoId) updateAssignment(d, { status: 'problem', result: e.message });
+    });
+  }
+}
 function finish(t, r, reply) {
+  releaseAfter(t, r);
   const orders = readJSON(ORDERS_FILE, []);
   const o = [...orders].reverse().find(x => x.to === t.agent && x.task === t.task && x.status === 'handed out');
   const record = { result: r.done, work: r.work || null, doneBy: r.doneBy, checkedBy: r.checkedBy || null, tries: r.tries, sendBacks: r.sendBacks };
@@ -1624,7 +1707,7 @@ ensureNotes();
 function probe(agent, tools) {
   return new Promise((resolve) => {
     const args = ['-p', 'safety check', '--model', MODEL, '--output-format', 'stream-json', '--verbose', '--max-turns', '1',
-      ...lockdown(agent, tools), '--permission-mode', 'dontAsk'];
+      ...lockdown(agent, tools), '--permission-mode', 'dontAsk', '--system-prompt-snapshot', 'off'];
     const env = { ...subscriptionEnv(usesConnectors(tools)), ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' };
     let out = '', done = false, child;
     try { child = spawn(CLAUDE, args, { cwd: ROOM, env, shell: false, windowsHide: true }); } catch (e) { return resolve({ error: String(e.message || e) }); }

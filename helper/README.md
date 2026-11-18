@@ -79,6 +79,9 @@ Marshall is always looking for ways to make the team better. When a townsperson 
 
 - **Town facts:** your answers to their questions (`helper/marshall-home/town-facts.md`). Every townsperson, worker and Marshall reads them.
 - **Approved work:** once you **Approve** something in the General Store, everyone sees it listed, and the townspeople it concerns (and their workers) get its text. For example, an approved offer sheet goes to Prospecting, Sales, Marketing, Product, Finance, Legal and Client Success. Work you haven't approved isn't shared.
+- **Always up to date:** every message to an agent includes their current notes, the town facts and approved work (not a copy from when their conversation started).
+- **No repeat questions:** before a question reaches you, it's compared with ones you've already answered; if it's the same thing in other words, it's dropped and the agent is pointed to your answer. Questions that say they're checking a conflict ("To confirm: …") still come through.
+- **Working together:** Marshall can give work in order ("Ezra, after Rufus"): the second person starts only when the first is done and checked, and receives their finished work. Any townsperson can also hand a colleague something with a PASS line; it lands in that colleague's notes under "From colleagues".
 - **Questions any time:** when a townsperson needs something only you can tell them, during a task, a chat or a talk with a colleague, it goes on your **Questions** list.
 - **Waiting on you:** if a task can't be done properly without your answers, it shows **Waiting on you** on your to-do list (with an "Answer their questions" button) instead of being done with blanks. When every question for it is answered or skipped, it **starts again by itself** with your answers (at most twice; after that they do their best).
 

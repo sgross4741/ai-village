@@ -388,6 +388,7 @@
     if (t.status === 'needs someone') return `Nobody in town fits yet. Marshall: ${t.note || ''}`;
     if (t.status === 'problem') return `Problem: ${t.note || 'something went wrong'}`;
     const by = t.assignments.map(a => a.status === 'done' ? `${a.name}: done`
+      : /^waiting for /.test(a.status) ? `${first(a.name)} is ${a.status}, then starts with their work`
       : a.status === 'waiting on you' ? `${first(a.name)} is waiting on you: ${(a.questions || []).length || 'some'} question${(a.questions || []).length === 1 ? '' : 's'} in Questions`
       : a.status === 'with worker' ? `${a.worker} is working on it${a.tries ? ` (try ${a.tries + 1})` : ''}; ${first(a.name)} will check`
       : a.status === 'checking' ? `${first(a.name)} is checking ${a.worker}'s work`
