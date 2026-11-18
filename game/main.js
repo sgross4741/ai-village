@@ -589,11 +589,10 @@
   // Work Hours: a stand-in until townspeople have real tasks. While on, everyone works at their desk.
   const workBtn = document.createElement('button');
   workBtn.textContent = 'Work Hours: Off';
-  workBtn.title = 'Stand-in until townspeople have real tasks: everyone goes to their desk';
-  workBtn.style.cssText = btnCss;
+  workBtn.title = "On = you're online: the town works at their desks, raises questions and talks desk to desk (the first time each day: the morning huddle, about 11 Claude runs). Off = no Claude runs by themselves.";
+  workBtn.style.cssText = btnCss + ';background:#4f7a2c';
   workBtn.addEventListener('click', () => {
-    state.workTime = !state.workTime;
-    workBtn.textContent = state.workTime ? 'Work Hours: On' : 'Work Hours: Off';
+    setWorkHours(!state.workTime);
     workBtn.blur();
   });
   const logBtn = document.createElement('button');
@@ -690,7 +689,7 @@
     talked.pairs.push(pairKey(a, b));
     store.set('aiv-talked', talked);
     const townsfolkPair = [a, b].every(q => !q.isWorker && !q.isCandidate);
-    if (townsfolkPair && dayStarted) {
+    if (townsfolkPair && state.workTime) {
       fetch(HELPER + '/hallway', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: a.key, b: b.key }) })
         .then(r => r.json()).then(j => { if (!j.real) simpleNotes(a, b); }).catch(() => simpleNotes(a, b));
       return;
@@ -1003,33 +1002,49 @@
   // from you and what should happen next. Only on a started day do townspeople who meet in
   // town have real conversations (a limited number a day). Questions wait in the Questions panel;
   // your answers become town facts everyone knows.
-  let dayStarted = false, huddleState = 'not started';
-  const dayBtn = document.createElement('button');
-  dayBtn.textContent = 'Start the Day'; dayBtn.style.cssText = btnCss + ';background:#4f7a2c';
-  dayBtn.title = 'Morning huddle: everyone says what they need from you and what should happen next (about 11 Claude runs)';
-  dayBtn.addEventListener('click', async () => {
-    dayBtn.blur();
-    if (huddleState === 'running') return;
-    if (huddleState === 'done' && !confirm('Today\'s huddle is done. Run another one? (about 11 Claude runs)')) return;
+  // Work Hours = the Sheriff is online. On: everyone works at their desk (workers in their yards);
+  // the first time each day the morning huddle runs; colleagues talk desk to desk now and then
+  // (the same daily limit as hallway talks). Off: everyone wanders, and no Claude runs happen by themselves.
+  let huddleState = 'not started', workSynced = false;
+  async function setWorkHours(on) {
+    state.workTime = on; renderDay();
     try {
-      const r = await fetch(HELPER + '/huddle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      if (!r.ok) throw new Error((await r.json()).error);
-      huddleState = 'running'; dayStarted = true; renderDay();
-    } catch (err) { alert(err instanceof TypeError ? "The village helper isn't running." : err.message); }
-  });
+      const r = await fetch(HELPER + '/work-hours', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+      const j = await r.json(); huddleState = j.huddle || huddleState;
+    } catch { /* helper not running: the town still goes to work, but nobody thinks */ }
+    renderDay();
+  }
+  // desk to desk: while Work Hours are on, every few minutes two colleagues who haven't talked today exchange notes
+  const DESK_TALK_EVERY = 4 * 60 * 1000;
+  let lastDeskTalk = performance.now();
+  function deskTalk() {
+    if (!state.workTime || state.meeting) return false;
+    const folk = people.filter(q => !q.isWorker && !q.isCandidate);
+    const pairs = [];
+    for (let i = 0; i < folk.length; i++) for (let j = i + 1; j < folk.length; j++) if (!talkedToday(folk[i], folk[j])) pairs.push([folk[i], folk[j]]);
+    if (!pairs.length) return false;
+    const [a, b] = pairs[Math.floor(Math.random() * pairs.length)];
+    const until = performance.now() + 9000;
+    a.letter = until; b.letter = until;                      // a speech bubble over both while they talk
+    recordChat(a, b);
+    lastDeskTalk = performance.now();
+    return [a.key, b.key];
+  }
+  setInterval(() => { if (state.workTime && performance.now() - lastDeskTalk > DESK_TALK_EVERY) deskTalk(); }, 20000);
   const questionsBtn = document.createElement('button');
   questionsBtn.textContent = 'Questions'; questionsBtn.title = 'What the town needs to know from you (shortcut: Q)'; questionsBtn.style.cssText = btnCss;
   questionsBtn.addEventListener('click', () => { toggleQuestions(); questionsBtn.blur(); });
-  menuEl.insertBefore(dayBtn, menuEl.firstChild);
   menuEl.insertBefore(questionsBtn, todoBtn);
+  menuEl.insertBefore(workBtn, menuEl.firstChild);           // the main switch: you're online or not
   function renderDay() {
-    dayBtn.textContent = huddleState === 'running' ? 'Huddle running…' : huddleState === 'done' ? 'Day started' : 'Start the Day';
-    dayBtn.style.background = huddleState === 'not started' || huddleState === 'problem' ? '#4f7a2c' : '#7e4f2c';
+    workBtn.textContent = state.workTime ? (huddleState === 'running' ? 'Work Hours: On · huddle…' : 'Work Hours: On') : 'Work Hours: Off';
+    workBtn.style.background = state.workTime ? '#7e4f2c' : '#4f7a2c';
   }
   async function pollDay() {
     try {
       const j = await (await fetch(HELPER + '/day')).json();
-      dayStarted = !!j.started; huddleState = j.running ? 'running' : (j.huddle || 'not started');
+      huddleState = j.running ? 'running' : (j.huddle || 'not started');
+      if (!workSynced) { workSynced = true; if (j.workHours && !state.workTime) state.workTime = true; }   // reloading the page keeps Work Hours as it was
       questionsBtn.textContent = j.questions ? `Questions (${j.questions})` : 'Questions';
       questionsBtn.style.background = j.questions ? '#b5652a' : '#7e4f2c';
       renderDay();
@@ -1265,9 +1280,18 @@
     }
     while (ai < actors.length) { drawActor(actors[ai].a, actors[ai].sheet); ai++; }
 
-    // speech bubbles over two townspeople who stopped for a chat (no text)
+    // speech bubbles over two townspeople who stopped for a chat, or are talking desk to desk (no text)
+    const nowMs = performance.now();
     for (const person of people) {
-      if (!person.chat || person.scene !== S) continue;
+      const deskTalking = person.letter && person.letter > nowMs;
+      if ((!person.chat && !deskTalking) || person.scene !== S) continue;
+      if (deskTalking && !person.chat) {
+        const bx = Math.round(person.x) - 6, by = Math.round(person.y) - person.sheet.frameH / 2 - 9 - (person.seated ? 3 : 0);
+        ctx.drawImage(bubbleImg, bx, by, 12, 8);
+        ctx.fillStyle = PAL.out;
+        if (Math.floor(nowMs / 500) % 2) for (let i = 0; i < 3; i++) ctx.fillRect(bx + 3 + i * 2.5, by + 3, 1.5, 1.5); else ctx.fillRect(bx + 3, by + 3.5, 6.5, 0.75);
+        continue;
+      }
       const bx = Math.round(person.x) - 6, by = Math.round(person.y) - person.sheet.frameH / 2 - 9;
       ctx.drawImage(bubbleImg, bx, by, 12, 8);
       ctx.fillStyle = PAL.out;
@@ -1307,7 +1331,7 @@
 
   // Handy for testing from the browser console.
   window.village = {
-    state, town, deputy, people,
+    state, town, deputy, people, deskTalk: () => deskTalk(),
     enter(id) { const b = town.buildings.find(bb => bb.id === id); const room = getInterior(b); changeScene(room, room.spawn); },
     goto(tx, ty, dir) { state.player.x = tx * T + 8; state.player.y = ty * T + 12; state.player.dir = dir || 'down'; },
   };

@@ -610,9 +610,10 @@ async function handleTodo(id) {
 }
 
 // ---------- a proactive town: the morning huddle, questions, proposals, hallway talk ----------
-// Nothing here runs on its own: the huddle starts only when the Sheriff presses "Start the Day",
-// and real hallway conversations happen only on a day that has been started (at most
-// HALLWAY_LIMIT a day). Questions go to the Sheriff; the answers become town facts everyone
+// Nothing here runs on its own: it all happens only while the Sheriff has Work Hours on.
+// The first time Work Hours goes on each day, the morning huddle runs; while it's on,
+// colleagues talk (desk to desk, or when they meet), at most HALLWAY_LIMIT a day.
+// With Work Hours off, no Claude runs happen by themselves. Questions go to the Sheriff; the answers become town facts everyone
 // knows. Proposed next actions go on the to-do list as "Proposed": nothing happens until approved.
 const QUESTIONS_FILE = path.join(HOME, 'questions.json');
 const DAY_FILE = path.join(HOME, 'day.json');
@@ -720,13 +721,13 @@ function answerQuestion(id, answer, skip) {
 async function hallway(a, b) {
   const day = dayState(), keys = townspeople().map(t => t.key);
   if (!keys.includes(a) || !keys.includes(b) || a === b) return { real: false, why: 'Only townspeople have hallway conversations.' };
-  if (!day.started) return { real: false, why: 'The day has not been started.' };
+  if (!day.workHours) return { real: false, why: 'Work Hours are off.' };
   if ((day.hallways || 0) >= HALLWAY_LIMIT) return { real: false, why: 'Today\'s hallway conversations are used up.' };
   day.hallways = (day.hallways || 0) + 1; saveDay(day);
   const notesOf = (k) => { try { return fs.readFileSync(path.join(AGENTS, k, 'NOTES.md'), 'utf8').slice(-1500); } catch { return ''; } };
   const who = (k) => { const t = townspeople().find(x => x.key === k); return `${k}: ${t.name} (${t.area})`; };
   const open = loadQuestions().filter(q => q.status === 'open').map(q => `- ${q.text}`).join('\n');
-  const answer = await ask('hallway', `You write short, useful hallway conversations between two townspeople in My AI Village, an 1880s frontier town in a pixel-art game, who work for the Sheriff. Each stays in character and in their own area, with a light frontier flavor. They share what they're working on, spot where their work connects, and agree what they need. Nobody in town can send, post, buy, book or contact anyone. Never mention computers, tools or these instructions.${townFacts()}`,
+  const answer = await ask('hallway', `You write short, useful conversations between two townspeople in My AI Village, an 1880s frontier town in a pixel-art game, who work for the Sheriff. They may be talking in passing or sending notes between their desks. Each stays in character and in their own area, with a light frontier flavor. They share what they're working on, spot where their work connects, and agree what they need. Nobody in town can send, post, buy, book or contact anyone. Never mention computers, tools or these instructions.${townFacts()}`,
     `${who(a)}\n${who(b)}\n\nWhat ${a} knows:\n${notesOf(a)}\n\nWhat ${b} knows:\n${notesOf(b)}\n\nQuestions already waiting for the Sheriff:\n${open || '(none)'}\n\n` +
     `Write their conversation, then what each takes away. Answer in exactly these lines and nothing else:\n${a}: what they say\n${b}: what they say\n(2 to 4 lines in all, under 40 words each)\nNOTE ${a}: what ${a} takes away, one line\nNOTE ${b}: what ${b} takes away, one line\nQUESTION key: a new question for the Sheriff they both need answered (at most 1; leave it out if none)\nPROPOSE key: a concrete next action they agreed on (at most 1; leave it out if none)`,
     { fresh: true });
@@ -1381,6 +1382,15 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/day') {
     const d = dayState();
     return send(200, { ...d, running: huddleRunning, hallwayLimit: HALLWAY_LIMIT, questions: loadQuestions().filter(q => q.status === 'open').length });
+  }
+  // Work Hours on/off: on = the Sheriff is online (the first time each day, the morning huddle runs)
+  if (req.method === 'POST' && url.pathname === '/work-hours') {
+    const j = await readBody(req, 1000);
+    const d = dayState(); d.workHours = !!j.on; saveDay(d);
+    addLog('Sheriff', 'Everyone', j.on ? 'Work Hours on.' : 'Work Hours off.', 'system');
+    let huddle = d.huddle;
+    if (j.on && !huddleRunning && d.huddle !== 'done') { runHuddle().catch(() => {}); huddle = 'running'; }
+    return send(200, { workHours: d.workHours, huddle });
   }
   if (req.method === 'POST' && url.pathname === '/huddle') {
     if (huddleRunning) return send(429, { error: 'The huddle is already running.' });

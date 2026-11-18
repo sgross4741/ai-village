@@ -63,15 +63,17 @@ Marshall is always looking for ways to make the team better. When a townsperson 
 - **Not hired:** they walk out of town.
 - Limits: one candidate at a time; at most 3 workers per townsperson (what a yard fits); a townsperson asks for help at most once a day. Finding a candidate is one Claude run.
 
-## Start the Day: a proactive town
+## Work Hours: when you're online
 
-Press **Start the Day** (top left of the toolbar) when you sit down. Marshall runs a **morning huddle**: every townsperson looks at their area, their notes and what the town knows, and says what they need from you and what should happen next. Marshall merges it all (about 11 Claude runs in all).
+**Work Hours** (first button in the toolbar) is your "I'm online" switch.
 
+- **On:** townspeople work at their desks and workers in their yards (anyone making something works at a General Store workbench). The first time you turn it on each day, Marshall runs a **morning huddle**: every townsperson says what they need from you and what should happen next, and Marshall merges it (about 11 Claude runs). Turning it on again later that day just resumes, with no new huddle.
+- **Colleagues keep talking while seated:** every few minutes two townspeople who haven't talked today exchange notes desk to desk (a speech bubble shows over both). They take notes, and may raise a question or propose a to-do. At most 10 conversations a day (change it with the `VILLAGE_HALLWAY_LIMIT` setting); work from to-dos and orders isn't limited by this.
+- **Off:** everyone wanders town, and **no Claude runs happen by themselves**. Townspeople who meet only swap simple notes. Questions and proposals wait for you.
 - **Questions** (toolbar, or press **Q**): what the town needs to know from you. Answer once and **everyone** knows: your answers are kept as **town facts** (`helper/marshall-home/town-facts.md`) that every townsperson and worker reads. Skip what doesn't matter.
 - **Proposed to-dos** appear on your to-do list as *Proposed*, with **Approve** (Marshall hands it out like any to-do) and **Decline**. Nothing happens without your Approve.
-- **Hallway talks:** on a day you've started, when two townspeople meet in town they really talk (one Claude run each), take notes, and may raise a question or propose a to-do. At most 10 a day (change it with the `VILLAGE_HALLWAY_LIMIT` setting). Before you press Start the Day, they only exchange simple notes, with no Claude runs.
 - Marshall passes on what one townsperson needs from another (it goes in their notes under "Open items").
-- Nothing here runs on its own: no button press, no huddle.
+- Work Hours stays as you left it if you reload the page.
 
 ## Tools (your tool matrix, Phase 1)
 
