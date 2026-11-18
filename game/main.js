@@ -154,7 +154,7 @@
   const chatInput = $('chat-input'), chatStatus = $('chat-status'), nextBatchBtn = $('next-batch');
   const logEl = $('log'), logLines = $('log-lines'), brainEl = $('brain');
   let chatWith = null;                       // 'marshall' or a townsperson
-  let thinking = null;                       // key of whoever is working out a reply right now
+  const thinkingNow = new Set();             // keys of everyone working out a reply to you right now
   let pendingBatches = 0;
   const transcripts = new Map();             // key -> lines said in your chats with them
   const keyOf = (w) => (w === 'marshall' ? 'marshall' : w.key);
@@ -240,7 +240,7 @@
   }
   function showStatus() {
     const key = chatWith && keyOf(chatWith);
-    chatStatus.textContent = thinking && thinking === key ? `${nameOf(chatWith)} is thinking…` : '';
+    chatStatus.textContent = key && thinkingNow.has(key) ? `${nameOf(chatWith)} is thinking…` : '';
     nextBatchBtn.classList.toggle('hidden', !(key === 'marshall' && pendingBatches > 0));
     nextBatchBtn.textContent = `Send next batch (${pendingBatches} waiting)`;
   }
@@ -301,14 +301,14 @@
     const text = chatInput.value.trim();
     if (!text || !chatWith) return;
     const who = chatWith, key = keyOf(who);
-    if (thinking === key) return;
+    if (thinkingNow.has(key)) return;
     chatInput.value = '';
     sayIn(key, 'Sheriff', text);
     if (who.isWorker) {                        // workers take work only from their townsperson: no call to the helper
       sayIn(key, who.name, `*friendly whinny* (${who.name} takes work only from ${who.boss.name}. To give them a job, tell ${who.boss.name.split(' ')[0]}: "give this to your worker".)`);
       return;
     }
-    thinking = key; showStatus();
+    thinkingNow.add(key); showStatus();
     try {
       const r = await fetch(HELPER + '/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: key, text }),
@@ -318,6 +318,8 @@
       sayIn(key, nameOf(who), j.reply);
       if (j.delegated && j.delegated.length) sayIn(key, '', `Handed to ${j.delegated.map(d => d.name).join(', ')}. Marshall will report back here when it's done; follow along in the chat log (L).`, 'note');
       if (j.handedTo) sayIn(key, '', `${who.name.split(' ')[0]} handed it to ${j.handedTo} and will check the work. It's on your to-do list; follow along in the chat log (L).`, 'note');
+      if (j.started) sayIn(key, '', `${who.name.split(' ')[0]} started a task: "${j.started}". It's on your to-do list, and the result will come back here.`, 'note');
+      if (j.kept) sayIn(key, '', `What ${who.name.split(' ')[0]} wrote is kept on your to-do list${j.todo ? '' : ''} (anything they made is in the General Store).`, 'note');
       if (j.noted) sayIn(key, '', `${who.name.split(' ')[0]} added something to their notes.`, 'note');
       if (typeof j.pending === 'number') pendingBatches = j.pending;
       brainEl.textContent = 'Village brains: connected'; brainEl.classList.add('on');
@@ -328,7 +330,7 @@
         : String(err.message || err), 'problem');
       if (offline) checkBrain();
     } finally {
-      if (thinking === key) thinking = null;
+      thinkingNow.delete(key);
       showStatus();
     }
   });
@@ -343,6 +345,24 @@
     showStatus();
   });
 
+  // chat history after a reload: the helper's log holds every chat, so each chat box is rebuilt from it
+  const history = new Map();
+  const keyForName = (n) => n === 'Marshall' ? 'marshall' : (people.find(q => q.name === n) || {}).key;
+  function remember(e) {
+    const mine = e.from === 'Sheriff' ? keyForName(e.to) : e.to === 'Sheriff' ? (e.chat || keyForName(e.from)) : null;
+    if (!mine || e.kind === 'system' || e.kind === 'question' || e.kind === 'todo') return;
+    if (!history.has(mine)) history.set(mine, []);
+    history.get(mine).push({ who: e.from === 'Sheriff' ? 'Sheriff' : (mine === 'marshall' ? 'Marshall' : e.from), text: e.text, cls: e.kind === 'problem' ? 'problem' : '' });
+    if (e.work) history.get(mine).push({ who: '', text: e.work, cls: 'work' });
+  }
+  function restoreHistory() {
+    for (const [key, lines] of history) {
+      if (transcripts.has(key)) continue;
+      transcripts.set(key, [{ who: '', text: 'Earlier conversation:', cls: 'note' }, ...lines.slice(-40)]);
+    }
+    if (chatWith && !chatEl.classList.contains('hidden')) openChat(chatWith);
+  }
+
   // the chat log: Marshall's hand-offs and the townspeople's reports, as they happen
   let lastLogId = 0, firstPoll = true;
   async function pollLog() {
@@ -354,14 +374,17 @@
         const time = new Date(e.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         addLine(logLines, `${e.from} → ${e.to}`, e.text, e.kind, time);
         if (e.work) addLine(logLines, '', e.work, 'work');
-        // Marshall reporting back: show it in Marshall's chat too (only news since the page opened)
-        if (e.chat === 'marshall' && !firstPoll) {
-          sayIn('marshall', 'Marshall', e.text, e.kind === 'problem' ? 'problem' : '');
-          if (e.work) sayIn('marshall', '', e.work, 'work');
-          if (e.draftId) sayIn('marshall', '', e.draftId, 'gmailbtn');
-          if (e.workshop) pollWorkshop().then(() => sayIn('marshall', '', e.workshop, 'workshopbtn'));
+        // reports back (Marshall's, or a townsperson's on a job you gave them in a chat): into that chat too
+        if (e.chat && !firstPoll) {
+          const key = e.chat, speaker = key === 'marshall' ? 'Marshall' : e.from;
+          sayIn(key, speaker, e.text, e.kind === 'problem' ? 'problem' : '');
+          if (e.work) sayIn(key, '', e.work, 'work');
+          if (e.draftId) sayIn(key, '', e.draftId, 'gmailbtn');
+          if (e.workshop) pollWorkshop().then(() => sayIn(key, '', e.workshop, 'workshopbtn'));
         }
+        if (firstPoll) remember(e);                // after a reload: rebuild each chat's history from the log
       }
+      if (firstPoll) restoreHistory();
       firstPoll = false;
       // who's busy with a task right now: they walk home and work at their desk
       for (const p of people) p.tasks = j.working && j.working[p.key] ? [j.working[p.key]] : [];
@@ -1362,8 +1385,8 @@
 
     // thinking bubbles (no text): over whoever is working out a reply, and anyone working on a task
     const thinkers = [];
-    if (thinking === 'marshall' && deputy.scene === S) thinkers.push({ a: deputy, h: marshallSheet.frameH });
-    for (const person of people) if (person.scene === S && (thinking === person.key || person.tasks.length)) thinkers.push({ a: person, h: person.sheet.frameH });
+    if (thinkingNow.has('marshall') && deputy.scene === S) thinkers.push({ a: deputy, h: marshallSheet.frameH });
+    for (const person of people) if (person.scene === S && (thinkingNow.has(person.key) || person.tasks.length)) thinkers.push({ a: person, h: person.sheet.frameH });
     for (const { a, h } of thinkers) {
       const bx = Math.round(a.x) - 6, by = Math.round(a.y) - h / 2 - 9 - (a.seated ? 3 : 0);
       ctx.drawImage(bubbleImg, bx, by, 12, 8);
