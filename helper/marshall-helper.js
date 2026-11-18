@@ -167,7 +167,7 @@ const CALENDAR_READ = { [CAL('list_events')]: { calendarIdIn: ['primary'] }, [CA
 const OFFICIAL_SITES = (process.env.VILLAGE_OFFICIAL_SITES || '.gov').split(',').map(x => x.trim()).filter(Boolean);
 const MATRIX = {
   marshall: { calendar: true },
-  clem:     { search: true, fetch: 'any' },                 // Prospecting: research only, no private data in those runs
+  clem:     { search: true },                                // Prospecting: web search (no page-opening, so he can know the town facts)
   augustus: { library: true, calendar: true },              // Sales
   jo:       { library: true },                              // Delivery
   ezra:     { search: true, library: true },                // Product (no page-opening: the library is private)
@@ -361,7 +361,7 @@ function sayLine(text, max) {
 }
 
 // a section that may run over several lines, up to the next answer line (keeps line breaks)
-const FIELDS = 'SAY|NOTE|DONE|TASK|WORKER|INSTRUCTIONS|WORK|VERDICT|CHECK|FIXED|HELP|HIRE|DRAFT|LINK|NAME|PERSONALITY|QUIRK|STRENGTHS|WHY';
+const FIELDS = 'SAY|NOTE|DONE|TASK|WORKER|INSTRUCTIONS|WORK|VERDICT|CHECK|FIXED|HELP|HIRE|DRAFT|LINK|NAME|PERSONALITY|QUIRK|STRENGTHS|WHY|QUESTION|BLOCKED|PROPOSE|ASK|PASS';
 function block(text, key) {
   const re = new RegExp('^\\s*\\**\\s*' + key + '\\s*\\**\\s*:[ \\t]*([\\s\\S]*?)(?=^\\s*\\**\\s*(?:' + FIELDS + ')\\b[^\\n:]{0,20}\\**\\s*:|(?![\\s\\S]))', 'im');
   const m = text.match(re);
@@ -507,7 +507,7 @@ function addNote(agent, section, text) {
 // ---------- Marshall ----------
 function marshallPrompt() {
   const roster = townspeople().map(t => `- ${t.key}: ${t.name} (${t.area})`).join('\n');
-  return fs.readFileSync(MARSHALL_PERSONA, 'utf8') + `\n\nThe townspeople you can hand work to (use their key):\n${roster}\n` + `\n\n## Your notes` + toolsNote('marshall') + townFacts();
+  return fs.readFileSync(MARSHALL_PERSONA, 'utf8') + `\n\nThe townspeople you can hand work to (use their key):\n${roster}\n` + `\n\n## Your notes` + toolsNote('marshall') + townFacts() + approvedWorkText('marshall');
 }
 const pending = [];             // tasks waiting for the Sheriff's "Send next batch"
 const working = new Map();      // agent key -> task they're working on right now
@@ -529,6 +529,7 @@ async function talkToMarshall(text) {
   const reply = sayLine(answer, 320);
   const tasks = parseTasks(answer, text);
   addLog('Marshall', 'Sheriff', reply);
+  if ([...answer.matchAll(/^\s*\**\s*QUESTION\s*\**\s*:\s*(.+)$/gim)].slice(0, 3).map(m => addQuestion('marshall', m[1], 'chat')).some(Boolean)) noticeOpenItems();
   for (const m of answer.matchAll(/^\s*\**\s*HIRE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
     if (townspeople().some(t => t.key === m[1].toLowerCase())) requestHelp(m[1].toLowerCase(), tidy(m[2], 200), 'Sheriff');
   }
@@ -579,7 +580,8 @@ function updateAssignment(t, change) {
     addLog('Marshall', 'Sheriff', `Done: "${todo.text}". It's crossed off your to-do list; hover over it to see what was done.`, 'system', { chat: 'marshall' });
     const draft = todo.assignments.find(a => a.draftId);
     if (!todo.assignments.some(a => a.workshop)) addNotice(draft ? 'draft' : 'done', draft ? `To-do done: "${clip(todo.text, 80)}". Want it in your Gmail drafts?` : `To-do done: "${clip(todo.text, 100)}"`, { todo: todo.id, draftId: draft ? draft.draftId : null });
-  } else if (todo.assignments.some(x => x.status === 'working' || x.status === 'done')) todo.status = 'working';
+  } else if (todo.assignments.some(x => x.status === 'waiting on you')) todo.status = 'waiting';
+  else if (todo.assignments.some(x => x.status === 'working' || x.status === 'done')) todo.status = 'working';
   saveTodos(todos);
 }
 
@@ -627,15 +629,50 @@ const dayState = () => { const d = readJSON(DAY_FILE, {}); return d.date === tod
 const saveDay = (d) => writeJSON(DAY_FILE, d);
 const loadQuestions = () => readJSON(QUESTIONS_FILE, []);
 const sameText = (a, b) => a.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim() === b.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
-function addQuestion(from, text, via) {
-  text = tidy(text, 300);
+// a question for the Sheriff. `waitRef`: a task that waits for the answer (an open duplicate gets the task attached too)
+function addQuestion(from, text, via, waitRef) {
+  text = tidy(text, 400);
   if (isNone(text) || text.length < 8) return null;
   const all = loadQuestions();
-  if (all.some(q => q.status === 'open' && sameText(q.text, text))) return null;
-  const q = { id: all.reduce((m, x) => Math.max(m, x.id), 0) + 1, from, fromName: from === 'marshall' ? 'Marshall' : shortName(from), text, via, status: 'open', time: new Date().toISOString() };
+  const same = all.find(q => q.status === 'open' && sameText(q.text, text));
+  if (same) { if (waitRef) { same.waits = [...new Set([...(same.waits || []), waitRef])]; writeJSON(QUESTIONS_FILE, all); return same; } return null; }
+  const q = { id: all.reduce((m, x) => Math.max(m, x.id), 0) + 1, from, fromName: from === 'marshall' ? 'Marshall' : shortName(from), text, via, status: 'open', time: new Date().toISOString(), waits: waitRef ? [waitRef] : [] };
   all.push(q); writeJSON(QUESTIONS_FILE, all);
   addLog(q.fromName, 'Sheriff', `Question: ${text}`, 'question');
   return q;
+}
+// tasks waiting on the Sheriff's answers (marshall-home/waiting.json): they restart once every question is answered or skipped
+const WAITING_FILE = path.join(HOME, 'waiting.json');
+const taskRef = (t) => `${t.agent}:${t.todoId || 'order'}:${crypto.createHash('sha1').update(t.task).digest('hex').slice(0, 8)}`;
+function waitOnSheriff(t, qs, reply) {
+  const name = shortName(t.agent), ref = taskRef(t);
+  const waiting = readJSON(WAITING_FILE, {});
+  waiting[ref] = { t: { ...t, rounds: (t.rounds || 0) + 1, answered: undefined }, questions: qs.map(q => q.id), since: new Date().toISOString() };
+  writeJSON(WAITING_FILE, waiting);
+  working.delete(t.agent);
+  addLog(name, t.from || 'Marshall', `${reply} (Waiting on the Sheriff: ${qs.length} question${qs.length > 1 ? 's' : ''}.)`, 'question');
+  if (t.todoId) updateAssignment(t, { status: 'waiting on you', questions: qs.map(q => q.text) });
+  else addLog('Marshall', 'Sheriff', `${name} needs your answers before "${clip(t.task, 100)}" can go ahead. They're in Questions (Q).`, 'relay', { chat: 'marshall' });
+  const orders = readJSON(ORDERS_FILE, []);
+  const o = [...orders].reverse().find(x => x.to === t.agent && x.task === t.task && x.status === 'handed out');
+  if (o) { o.status = 'waiting on the Sheriff'; writeJSON(ORDERS_FILE, orders); }
+}
+function resumeWaiting() {
+  const waiting = readJSON(WAITING_FILE, {}), qs = loadQuestions();
+  for (const [ref, w] of Object.entries(waiting)) {
+    const mine = qs.filter(q => w.questions.includes(q.id));
+    if (mine.some(q => q.status === 'open')) continue;
+    delete waiting[ref]; writeJSON(WAITING_FILE, waiting);
+    const t = { ...w.t, answered: mine.map(q => ({ text: q.text, answer: q.status === 'answered' ? q.answer : '' })) };
+    addLog('Marshall', shortName(t.agent), `The Sheriff answered your questions on "${clip(t.task, 100)}". Back to it.`, 'task');
+    working.set(t.agent, t.task);
+    if (t.todoId) updateAssignment(t, { status: 'working' });
+    doTask(t).catch(e => {
+      addLog(shortName(t.agent), 'Marshall', `(couldn't answer: ${e.message})`, 'problem');
+      working.delete(t.agent);
+      if (t.todoId) updateAssignment(t, { status: 'problem', result: e.message });
+    });
+  }
 }
 function addProposal(from, text, via) {
   text = tidy(text, 300);
@@ -720,6 +757,7 @@ function answerQuestion(id, answer, skip) {
   }
   writeJSON(QUESTIONS_FILE, all);
   noticeOpenItems();
+  resumeWaiting();                                           // tasks waiting on these answers go ahead
   return q;
 }
 // two townspeople meet in town: a real (short) conversation, only on a started day, at most HALLWAY_LIMIT a day
@@ -734,7 +772,7 @@ async function hallway(a, b) {
   const open = loadQuestions().filter(q => q.status === 'open').map(q => `- ${q.text}`).join('\n');
   const answer = await ask('hallway', `You write short, useful conversations between two townspeople in My AI Village, an 1880s frontier town in a pixel-art game, who work for the Sheriff. They may be talking in passing or sending notes between their desks. Each stays in character and in their own area, with a light frontier flavor. They share what they're working on, spot where their work connects, and agree what they need. Nobody in town can send, post, buy, book or contact anyone. Never mention computers, tools or these instructions.${townFacts()}`,
     `${who(a)}\n${who(b)}\n\nWhat ${a} knows:\n${notesOf(a)}\n\nWhat ${b} knows:\n${notesOf(b)}\n\nQuestions already waiting for the Sheriff:\n${open || '(none)'}\n\n` +
-    `Write their conversation, then what each takes away. Answer in exactly these lines and nothing else:\n${a}: what they say\n${b}: what they say\n(2 to 4 lines in all, under 40 words each)\nNOTE ${a}: what ${a} takes away, one line\nNOTE ${b}: what ${b} takes away, one line\nQUESTION key: a new question for the Sheriff they both need answered (at most 1; leave it out if none)\nPROPOSE key: a concrete next action they agreed on (at most 1; leave it out if none)`,
+    `Write their conversation, then what each takes away. Answer in exactly these lines and nothing else:\n${a}: what they say\n${b}: what they say\n(2 to 4 lines in all, under 40 words each)\nNOTE ${a}: what ${a} takes away, one line\nNOTE ${b}: what ${b} takes away, one line\nQUESTION key: a question for the Sheriff (use the key of whoever needs it most; at most 2). If they say they need to ask the Sheriff anything, you MUST write it here as a specific question; never leave it only in their talk.\nPROPOSE key: a concrete next action they agreed on (at most 1; leave it out if none)`,
     { fresh: true });
   const lines = [];
   for (const m of answer.matchAll(/^\s*\**\s*([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
@@ -746,7 +784,8 @@ async function hallway(a, b) {
     if (k === a || k === b) addNote(k, 'Conversations', `Talked with ${shortName(k === a ? b : a)}: ${tidy(m[2], 300)}`);
   }
   let news = 0;
-  for (const m of answer.matchAll(/^\s*\**\s*QUESTION\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) if ([a, b].includes(m[1].toLowerCase()) && addQuestion(m[1].toLowerCase(), m[2], 'hallway')) { news++; break; }
+  let nq = 0;
+  for (const m of answer.matchAll(/^\s*\**\s*QUESTION\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) if ([a, b].includes(m[1].toLowerCase()) && nq < 2 && addQuestion(m[1].toLowerCase(), m[2], 'hallway')) { news++; nq++; }
   for (const m of answer.matchAll(/^\s*\**\s*PROPOSE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) if ([a, b].includes(m[1].toLowerCase()) && addProposal(m[1].toLowerCase(), m[2], 'hallway')) { news++; break; }
   if (news) noticeOpenItems();
   return { real: true, lines };
@@ -791,6 +830,43 @@ async function talkToRoom(text) {
 }
 
 // ---------- townspeople ----------
+// Approved work in the General Store is shared knowledge: everyone sees the list, and each
+// townsperson (and their workers) gets the text of the approved pieces that concern their area.
+const SHARE_RULES = [
+  [/offer|pric|service|package|assessment|sell|site|website|copy/i, ['clem', 'augustus', 'rufus', 'ezra', 'mortimer', 'beatrice', 'hattie']],
+  [/ideal.?client|client profile|lead|prospect|handoff|hand-off|pipeline|proposal/i, ['clem', 'augustus']],
+  [/voice|tone|brand|design|website|site|copy|linkedin|post/i, ['rufus', 'ezra']],
+  [/contract|agreement|terms|privacy|legal|checklist|registration|llc|compliance/i, ['beatrice', 'augustus', 'hattie']],
+  [/client list|check-in|feedback|onboard|renewal/i, ['hattie', 'jo']],
+  [/deliver|tracker|job|project/i, ['jo', 'silas']],
+  [/money|financ|budget|cost|income|invoice/i, ['mortimer', 'silas']],
+];
+function htmlToText(html) {
+  return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|h\d|li|tr|section)>/gi, '\n').replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;|&rsquo;/g, "'").replace(/&quot;|&ldquo;|&rdquo;/g, '"')
+    .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+}
+function approvedWorkText(agent) {
+  let items = [];
+  try { items = readJSON(WORKSHOP_FILE, []).filter(x => x.review && x.review.status === 'approved' && !x.supersededBy); } catch { return ''; }
+  if (!items.length) return '';
+  const concerns = (it) => it.agent === agent || SHARE_RULES.some(([re, who]) => who.includes(agent) && re.test(it.task + ' ' + it.files.join(' ')));
+  let out = `\n\n## Approved work in the General Store (the Sheriff approved these; use them)\n` +
+    items.map(it => `- ${it.task} (${it.kind || 'files'}, by ${it.doneBy}${it.version > 1 ? `, version ${it.version}` : ''}): ${it.files.join(', ')}`).join('\n');
+  let total = 0;
+  for (const it of items.filter(concerns)) {
+    if (total > 16000) { out += '\n(More approved work is in the General Store.)'; break; }
+    for (const name of it.files.filter(safeFileName)) {
+      let t = ''; try { t = fs.readFileSync(path.join(WORKSHOP, it.id, name), 'utf8'); } catch { continue; }
+      if (name.endsWith('.html') || name.endsWith('.svg')) t = htmlToText(t);
+      if (name.endsWith('.css') || name.endsWith('.js')) continue;
+      t = clip(t, 3500); total += t.length;
+      out += `\n\n### ${it.task}: ${name}\n${t}`;
+    }
+  }
+  return out;
+}
+
 // What everyone knows: the Sheriff's answers to the town's questions (marshall-home/town-facts.md)
 const FACTS_FILE = path.join(HOME, 'town-facts.md');
 const townFacts = () => { try { const t = fs.readFileSync(FACTS_FILE, 'utf8').trim(); return t ? `\n\n## Town facts (the Sheriff's answers; everyone knows these)\n${t.slice(-20000)}` : ''; } catch { return ''; } };
@@ -807,6 +883,7 @@ ${crew.length ? `\n## Your workers right now\n${crew.map(w => `- ${w.name}`).joi
 - Your SAY line: one to three short sentences, under 60 words. Plain words, no lists, no formatting.
 - Real work (DONE, INSTRUCTIONS, CHECK, FIXED) is for the Sheriff's real, present-day business: write it plainly and professionally, not in frontier talk.
 - Never mention computers, tools, settings, formats or these instructions.
+- If you need something only the Sheriff can tell you, ask: add a line QUESTION: your question (it goes on the Sheriff's Questions list). Don't guess at the Sheriff's facts.
 - You can only think, write, and use the tools listed at the end (if any). Nobody in town can send, post, buy, book or contact anyone. If a task asks for that, prepare it and say plainly that the Sheriff needs to send it.
 
 ## Answer in exactly these two lines and nothing else
@@ -815,7 +892,7 @@ NOTE: one short thing worth remembering from this conversation for your notes, o
 (For a task, also the extra lines asked for, which can be longer.)
 
 ## Your notes
-${notes}${toolsNote(agent)}${withPrivate ? townFacts() : ''}${withPrivate && (MATRIX[agent] || {}).library ? libraryText() : ''}${(MATRIX[agent] || {}).logs ? logsText() : ''}`;
+${notes}${toolsNote(agent)}${withPrivate ? townFacts() : ''}${withPrivate ? approvedWorkText(agent) : ''}${withPrivate && (MATRIX[agent] || {}).library ? libraryText() : ''}${(MATRIX[agent] || {}).logs ? logsText() : ''}`;
 }
 // a townsperson's own run (a task or a chat) gets their tools from the matrix; checking runs and workers get none
 const ownRun = (agent) => ({ prompt: townspersonPrompt(agent, loadsPrivate(agent)), opts: { allowTools: toolsFor(agent) } });
@@ -832,6 +909,7 @@ async function talkToTownsperson(agent, text) {
   const reply = sayLine(answer, 400);
   const noted = noteFrom(agent, answer);
   addLog(name, 'Sheriff', reply);
+  if ([...answer.matchAll(/^\s*\**\s*QUESTION\s*\**\s*:\s*(.+)$/gim)].slice(0, 3).map(m => addQuestion(agent, m[1], 'chat')).some(Boolean)) noticeOpenItems();
   if (!handOver) return { reply, noted };
   // it goes on the Sheriff's to-do list, already with this townsperson, so you can follow it there
   const instructions = block(answer, 'INSTRUCTIONS') || text;
@@ -849,6 +927,10 @@ async function talkToTownsperson(agent, text) {
   return { reply, noted, handedTo: w.name, todo: todo.id };
 }
 
+const BLOCK_ASK = `If you can't do this properly without facts only the Sheriff can give (and the town facts, approved work and your notes don't have them), don't guess and don't fill it with blanks. Instead add:
+QUESTION: one specific question for the Sheriff (one per line, up to 3)
+BLOCKED: yes
+If you can do a useful part now, do that part and still ask your questions (then leave BLOCKED out).`;
 const HELP_ASK = `If you need more help (too much work, or your workers can't keep up), add: HELP: why, in one sentence. Otherwise leave it out.`;
 const YOURSELF = `WORK: the finished piece itself in full, if the task asks for something written (a letter, email, plan, list); leave this line out otherwise\nDONE: what you did, in up to 80 words, and anything the Sheriff still has to do (for example, send it).`;
 
@@ -858,18 +940,25 @@ async function doTask(t) {
   const toWorker = wantsWorker(t.task, w);
   const crew = workersOf(t.agent);
   const crewLine = crew.length > 1 ? `Your workers: ${crew.map(x => x.name + (working.has(x.key) ? ' (busy right now)' : '')).join(', ')}. If one should do it, name them on the WORKER line, like "WORKER: yes, ${crew[0].name}".\n` : '';
-  const how = !w ? `Do what you can and report back to Marshall. After your SAY line add:\n${YOURSELF}\n${HELP_ASK}`
+  const how = !w ? `Do what you can and report back to Marshall. After your SAY line add:\n${YOURSELF}\n${HELP_ASK}\n${BLOCK_ASK}`
     : `Your worker ${w.name} (a horse, an intern on Sonnet 5.5) can take on clear, self-contained pieces of work: drafts, lists, summaries, write-ups. You check everything ${w.name} does before it counts as done.\n` + crewLine +
       (toWorker ? `The Sheriff wants this given to ${w.name}: hand it over.\n` : `Decide whether ${w.name} can handle this one.\n`) +
       `If ${w.name} should do it, after your SAY line add:\nWORKER: yes\nINSTRUCTIONS: clear, complete instructions for ${w.name}: what to make, for whom, the key points, length and tone.\n` +
-      `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}\n${HELP_ASK}`;
+      `If you'll do it yourself, after your SAY line add:\nWORKER: no\n${YOURSELF}\n${HELP_ASK}\n${BLOCK_ASK}`;
   const own = ownRun(t.agent);
   const answer = await ask(t.agent, own.prompt,
+    (t.answered && t.answered.length ? `You were waiting on the Sheriff for this task. The Sheriff's answers:\n${t.answered.map(q => `- ${q.text} → ${q.answer || '(skipped: do your best without it)'}`).join('\n')}\n${(t.rounds || 0) >= 2 ? "You've asked twice already: do the best you can now, and don't mark it BLOCKED again.\n" : ''}\n` : '') +
     (t.revise ? `The Sheriff reviewed what you made and asked for changes.\nThe Sheriff's feedback: ${t.revise.feedback}\nRevise it (or have your worker revise it, with clear instructions that include this feedback). Hand back the complete new version of every file.\nThe current version:\n${t.revise.files}\n\n` : '') +
     `Marshall, the Deputy, passes you this task from the Sheriff's ${t.todoId ? 'to-do list' : 'order'} ("${t.order}"): ${t.task}\n${how}\n${MAKE_FILES}\nIf your worker makes the files, tell them so in your instructions, including which kind of file.${designGuide(t.order + ' ' + t.task)}`, own.opts);
   const reply = sayLine(answer, 400);
   noteFrom(t.agent, answer);
   askedForHelp(t.agent, answer);
+  // questions for the Sheriff; if blocked, the task waits for the answers (then restarts by itself)
+  const asked = [...answer.matchAll(/^\s*\**\s*QUESTION\s*\**\s*:\s*(.+)$/gim)].map(m => m[1]).slice(0, 3);
+  const blocked = /^\W*yes/i.test(grab(answer, 'BLOCKED')) && asked.length && (t.rounds || 0) < 2;
+  const qs = asked.map(text => addQuestion(t.agent, text, 'task', blocked ? taskRef(t) : null)).filter(Boolean);
+  if (qs.length) noticeOpenItems();
+  if (blocked && qs.length) return waitOnSheriff(t, qs, reply);
   const chosen = crew.find(x => new RegExp('\\b' + x.name + '\\b', 'i').test(grab(answer, 'WORKER')));
   if (chosen) w = chosen;
   const instructions = block(answer, 'INSTRUCTIONS') || (toWorker ? t.task : '');
@@ -888,7 +977,7 @@ async function doTask(t) {
 async function workerLoop(t, w, instructions) {
   const boss = shortName(t.agent), first = boss.split(' ')[0];
   const where = t.from === 'Sheriff' ? 'the Sheriff, who told you directly' : `the Sheriff's ${t.todoId ? 'to-do list' : 'order'}`;
-  instructions = clip(instructions, 1500);
+  instructions = clip(instructions, 8000);
   const sendBacks = [];
   let files = [];
   if (t.todoId) updateAssignment(t, { status: 'with worker', worker: w.name, instructions });
@@ -896,7 +985,7 @@ async function workerLoop(t, w, instructions) {
   try {
     for (let tries = 1; tries <= MAX_TRIES; tries++) {
       const notes = sendBacks[sendBacks.length - 1];
-      addLog(boss, w.name, tries === 1 ? instructions : `Sent back: ${notes}`, tries === 1 ? 'task' : 'sendback');
+      addLog(boss, w.name, tries === 1 ? instructions : `Sent back: ${notes}`, tries === 1 ? 'task' : 'sendback');   // the full text; the chat log shows it all
       if (t.todoId && tries > 1) updateAssignment(t, { status: 'with worker', tries: tries - 1, sendBacks });
       const wAnswer = await ask(w.key, workerPrompt(w.key), tries === 1
         ? `${first} gives you this task (from ${where}: "${t.task}").\nInstructions from ${first}: ${instructions}\n\n${t.revise ? `This is a revision. The Sheriff's feedback: ${t.revise.feedback}\nThe current version:\n${t.revise.files}\n\n` : ''}Do it now and hand back the finished work.${designGuide(t.order + ' ' + t.task + ' ' + instructions)}`
@@ -918,7 +1007,7 @@ async function workerLoop(t, w, instructions) {
       noteFrom(t.agent, cAnswer);
       askedForHelp(t.agent, cAnswer);
       const verdict = grab(cAnswer, 'VERDICT');
-      const check = tidy(block(cAnswer, 'CHECK') || sayLine(cAnswer, 300), 700);
+      const check = clip(block(cAnswer, 'CHECK') || sayLine(cAnswer, 300), 4000);
       const approved = /approv|good to go|accept|pass/i.test(verdict) && !/send\s*back|not approv|reject/i.test(verdict);
       if (approved) {
         addLog(boss, w.name, `Approved. ${check}`, 'check');
@@ -1276,7 +1365,7 @@ WORK: the finished work itself (as many lines as it needs)
 NOTE: one short thing worth remembering for next time, or none
 
 ## Your notes
-${notes}`;
+${notes}${townFacts()}${approvedWorkText(w.owner)}`;
 }
 
 // ---------- tiny web server, this computer only ----------
@@ -1565,7 +1654,7 @@ async function checkSafety() {
     say(plain.tools.length === 0, `tools they can use: ${plain.tools.length ? plain.tools.join(', ') : 'none'}`);
     say(plain.mcp.length === 0, `connections (connectors/MCP): ${plain.mcp.length ? plain.mcp.join(', ') : 'none'}`);
   }
-  for (const [who, label] of [['clem', 'Prospecting (web search and pages)'], ['beatrice', 'Legal (web search, .gov pages)'], ['augustus', 'Sales (calendar, read-only)']]) {
+  for (const [who, label] of [['clem', 'Prospecting (web search)'], ['beatrice', 'Legal (web search, .gov pages)'], ['augustus', 'Sales (calendar, read-only)']]) {
     const r = await probe(who, toolsFor(who));
     console.log(`\n${label}:`);
     if (r.error) say(false, `couldn't check: ${r.error}`);

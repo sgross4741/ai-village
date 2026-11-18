@@ -75,12 +75,19 @@ Marshall is always looking for ways to make the team better. When a townsperson 
 - Marshall passes on what one townsperson needs from another (it goes in their notes under "Open items").
 - Work Hours stays as you left it if you reload the page.
 
+## What the town knows, and asking you
+
+- **Town facts:** your answers to their questions (`helper/marshall-home/town-facts.md`). Every townsperson, worker and Marshall reads them.
+- **Approved work:** once you **Approve** something in the General Store, everyone sees it listed, and the townspeople it concerns (and their workers) get its text. For example, an approved offer sheet goes to Prospecting, Sales, Marketing, Product, Finance, Legal and Client Success. Work you haven't approved isn't shared.
+- **Questions any time:** when a townsperson needs something only you can tell them, during a task, a chat or a talk with a colleague, it goes on your **Questions** list.
+- **Waiting on you:** if a task can't be done properly without your answers, it shows **Waiting on you** on your to-do list (with an "Answer their questions" button) instead of being done with blanks. When every question for it is answered or skipped, it **starts again by itself** with your answers (at most twice; after that they do their best).
+
 ## Tools (your tool matrix, Phase 1)
 
 | Who | Can use |
 |---|---|
 | Marshall (Chief of Staff) | Your Google Calendar, read-only, primary calendar only |
-| Clem (Prospecting) | Web search, and opening web pages to read (those runs get no private information) |
+| Clem (Prospecting) | Web search (no page-opening, so he can know the town facts and approved work) |
 | Augustus (Sales), Hattie (Client Success) | The Village Library; your calendar, read-only |
 | Jo (Delivery), Rufus (Marketing) | The Village Library (Rufus also: Gmail drafts with your button) |
 | Ezra (Product) | Web search; the Village Library |

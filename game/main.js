@@ -388,6 +388,7 @@
     if (t.status === 'needs someone') return `Nobody in town fits yet. Marshall: ${t.note || ''}`;
     if (t.status === 'problem') return `Problem: ${t.note || 'something went wrong'}`;
     const by = t.assignments.map(a => a.status === 'done' ? `${a.name}: done`
+      : a.status === 'waiting on you' ? `${first(a.name)} is waiting on you: ${(a.questions || []).length || 'some'} question${(a.questions || []).length === 1 ? '' : 's'} in Questions`
       : a.status === 'with worker' ? `${a.worker} is working on it${a.tries ? ` (try ${a.tries + 1})` : ''}; ${first(a.name)} will check`
       : a.status === 'checking' ? `${first(a.name)} is checking ${a.worker}'s work`
       : a.status === 'sent back' ? `${first(a.name)} sent it back to ${a.worker} with notes`
@@ -408,7 +409,7 @@
         if (a.work) { lines.push(''); lines.push(a.work); lines.push(''); }
         if (a.checkedBy) lines.push(`<b>${first(a.checkedBy)}'s check:</b> ${a.result || ''}`);
         else lines.push(`${a.result || a.report || ''}`);
-      } else lines.push(a.status === 'working' ? 'Working on it now…' : a.status === 'with worker' ? `${a.worker} is working on it now…` : a.status === 'checking' ? `${first(a.name)} is checking it now…` : a.status === 'sent back' ? `Back with ${a.worker} to fix…` : a.status === 'problem' ? `Problem: ${a.result || ''}` : 'Waiting their turn.');
+      } else lines.push(a.status === 'waiting on you' ? `Waiting on your answers:\n${(a.questions || []).map(q => '- ' + q).join('\n')}` : a.status === 'working' ? 'Working on it now…' : a.status === 'with worker' ? `${a.worker} is working on it now…` : a.status === 'checking' ? `${first(a.name)} is checking it now…` : a.status === 'sent back' ? `Back with ${a.worker} to fix…` : a.status === 'problem' ? `Problem: ${a.result || ''}` : 'Waiting their turn.');
     }
     if (!t.assignments.length && t.note) { lines.push(''); lines.push(`Marshall: ${t.note}`); }
     return lines.map(l => l.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/&lt;(\/?)b&gt;/g, '<$1b>')).join('\n');
@@ -427,6 +428,12 @@
       const label = document.createElement('span'); label.textContent = t.text;
       const st = document.createElement('span'); st.className = 'state'; st.textContent = stateLine(t);
       text.append(label, st);
+      if (t.assignments.some(a => a.status === 'waiting on you')) {
+        const row = document.createElement('span'); row.className = 'state';
+        const b = document.createElement('button'); b.className = 'btn gmail primary'; b.textContent = 'Answer their questions';
+        b.addEventListener('click', (e) => { e.stopPropagation(); closeTodo(); openQuestions(); });
+        row.append(b); text.append(row);
+      }
       if (t.status === 'proposed') {
         const row = document.createElement('span'); row.className = 'state';
         for (const [lab, yes] of [['Approve', true], ['Decline', false]]) {
@@ -1119,7 +1126,8 @@
       const a = people.find(p => p.key === q.from) || (q.from === 'marshall' ? { sheet: marshallSheet } : null);
       const head = el('div', 'qhead');
       if (a && a.sheet) head.append(portrait(a.sheet));
-      head.append(el('span', 'who', q.fromName), el('span', 'via', q.via === 'hallway' ? 'hallway talk' : 'morning huddle'));
+      const via = { hallway: 'talking with a colleague', huddle: 'morning huddle', task: (q.waits || []).length ? 'a task is waiting on this' : 'while working', chat: 'in a chat' }[q.via] || '';
+      head.append(el('span', 'who', q.fromName), el('span', 'via' + ((q.waits || []).length ? ' waits' : ''), via));
       const ta = el('textarea'); ta.rows = 2; ta.placeholder = 'Your answer (everyone in town will know it)…';
       const row = el('div', 'qacts');
       const ans = el('button', 'btn primary', 'Answer'), skip = el('button', 'btn', 'Skip');
