@@ -68,8 +68,14 @@ Marshall is always looking for ways to make the team better. When a townsperson 
 **Work Hours** (first button in the toolbar) is your "I'm online" switch.
 
 - **On:** townspeople work at their desks and workers in their yards (anyone making something works at a General Store workbench). The first time you turn it on each day, Marshall runs a **morning huddle**: every townsperson says what they need from you and what should happen next, and Marshall merges it (about 11 Claude runs). Turning it on again later that day just resumes, with no new huddle.
-- **Colleagues keep talking while seated:** every few minutes two townspeople who haven't talked today exchange notes desk to desk (a speech bubble shows over both). They take notes, and may raise a question or propose a to-do. At most 10 conversations a day (change it with the `VILLAGE_HALLWAY_LIMIT` setting); work from to-dos and orders isn't limited by this.
-- **Off:** everyone wanders town, and **no Claude runs happen by themselves**. Townspeople who meet only swap simple notes. Questions and proposals wait for you.
+- **While it's on, the town keeps working with you:**
+  - **Follow-ups:** when you answer someone's questions, a minute later they say what they'll do next and propose a to-do (or ask a follow-up), one Claude run per person.
+  - **Colleague talks at a steady pace:** by default one every 12 minutes, at most 5 an hour. People with business between them go first (things passed or asked between them, work in connected areas), then anyone who hasn't talked today. A speech bubble shows over both. They take notes, and may raise questions or propose to-dos.
+  - **Marshall checks in** every hour: what moved, what's stuck, and the one thing that would help most, in his chat and in Notices, with any questions or proposed to-dos.
+  - **Concerns:** anyone can raise a worry as a question that starts with "Concern:".
+  - Change the pace at the top of **Notices** ("Work Hours pace"). It all pauses if the village page hasn't been open for 10 minutes.
+  - Nothing here starts work on its own: it brings you questions, concerns and proposed to-dos, which wait for your answer or Approve.
+- **Off:** everyone wanders town, and **no Claude runs happen by themselves**. Questions and proposals wait for you.
 - **Questions** (toolbar, or press **Q**): what the town needs to know from you. Answer once and **everyone** knows: your answers are kept as **town facts** (`helper/marshall-home/town-facts.md`) that every townsperson and worker reads. Skip what doesn't matter.
 - **Proposed to-dos** appear on your to-do list as *Proposed*, with **Approve** (Marshall hands it out like any to-do) and **Decline**. Nothing happens without your Approve.
 - Marshall passes on what one townsperson needs from another (it goes in their notes under "Open items").

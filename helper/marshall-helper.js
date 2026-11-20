@@ -654,12 +654,18 @@ async function handleTodo(id) {
 // ---------- a proactive town: the morning huddle, questions, proposals, hallway talk ----------
 // Nothing here runs on its own: it all happens only while the Sheriff has Work Hours on.
 // The first time Work Hours goes on each day, the morning huddle runs; while it's on,
-// colleagues talk (desk to desk, or when they meet), at most HALLWAY_LIMIT a day.
+// colleagues talk (desk to desk, or when they meet) at a steady pace the Sheriff sets, Marshall
+// checks in every so often, and whoever's questions the Sheriff answers follows up with a next step.
 // With Work Hours off, no Claude runs happen by themselves. Questions go to the Sheriff; the answers become town facts everyone
 // knows. Proposed next actions go on the to-do list as "Proposed": nothing happens until approved.
 const QUESTIONS_FILE = path.join(HOME, 'questions.json');
 const DAY_FILE = path.join(HOME, 'day.json');
-const HALLWAY_LIMIT = Number(process.env.VILLAGE_HALLWAY_LIMIT) || 10;
+const HALLWAY_LIMIT = Number(process.env.VILLAGE_HALLWAY_LIMIT) || 50;     // a daily safety cap on talks
+// the pace while Work Hours are on (the Sheriff can change these in Notices)
+const MINUTE = Number(process.env.VILLAGE_MINUTE_MS) || 60e3;          // (tests can make minutes shorter)
+const PACE_DEFAULTS = { talkEveryMinutes: 12, talksPerHour: 5, checkinEveryMinutes: 60 };
+const pace = () => ({ ...PACE_DEFAULTS, ...(settings().pace || {}) });
+const CONCERNS = `A QUESTION can also be a concern: start it with "Concern:", say what worries you, and ask what the Sheriff wants to do about it.`;
 const dayState = () => { const d = readJSON(DAY_FILE, {}); return d.date === today() ? d : { date: today(), started: false, huddle: 'not started', hallways: 0 }; };
 const saveDay = (d) => writeJSON(DAY_FILE, d);
 const loadQuestions = () => readJSON(QUESTIONS_FILE, []);
@@ -780,7 +786,7 @@ function noticeOpenItems() {
 }
 const HUDDLE_ASK = `It's the morning huddle. Think about your area, your notes and what the town knows so far. What do you need from the Sheriff to do your job well, and what should happen next?
 After your SAY line (one line to the room), add:
-QUESTION: a question for the Sheriff that you truly need answered and don't already know (one per line, up to 3)
+QUESTION: a question for the Sheriff that you truly need answered and don't already know (one per line, up to 3). ${CONCERNS}
 PROPOSE: a concrete next action for the town, small enough to do soon (one per line, up to 2)
 ASK key: something you need from another townsperson (use their key; at most 1; leave it out if not needed)
 Then your NOTE line. Don't repeat questions the town facts already answer.`;
@@ -839,6 +845,7 @@ function answerQuestion(id, answer, skip) {
     q.status = 'answered'; q.answer = answer; q.answered = new Date().toISOString();
     fs.appendFileSync(FACTS_FILE, `- ${today()} ${q.fromName} asked: ${q.text}\n  The Sheriff: ${answer}\n`);
     if (q.from !== 'marshall') addNote(q.from, "What I've learned", `The Sheriff answered my question "${clip(q.text, 120)}": ${clip(answer, 250)}`);
+    queueFollowUp(q);
     addLog('Sheriff', q.fromName, `${q.text} → ${answer}`, 'chat');
   }
   writeJSON(QUESTIONS_FILE, all);
@@ -851,19 +858,23 @@ async function hallway(a, b) {
   const day = dayState(), keys = townspeople().map(t => t.key);
   if (!keys.includes(a) || !keys.includes(b) || a === b) return { real: false, why: 'Only townspeople have hallway conversations.' };
   if (!day.workHours) return { real: false, why: 'Work Hours are off.' };
-  if ((day.hallways || 0) >= HALLWAY_LIMIT) return { real: false, why: 'Today\'s hallway conversations are used up.' };
-  day.hallways = (day.hallways || 0) + 1; saveDay(day);
+  if ((day.hallways || 0) >= HALLWAY_LIMIT) return { real: false, why: 'Today\'s conversations are used up.' };
+  const hourAgo = Date.now() - 3600e3, recent = (day.talkTimes || []).filter(t => t > hourAgo);
+  if (recent.length >= pace().talksPerHour) return { real: false, why: 'This hour\'s conversations are used up.' };
+  const pair = [a, b].sort().join('+');
+  if ((day.talked || []).includes(pair)) return { real: false, why: 'They already talked today.' };
+  day.hallways = (day.hallways || 0) + 1; day.talkTimes = [...recent, Date.now()]; day.talked = [...(day.talked || []), pair]; saveDay(day);
   const notesOf = (k) => { try { return fs.readFileSync(path.join(AGENTS, k, 'NOTES.md'), 'utf8').slice(-1500); } catch { return ''; } };
   const who = (k) => { const t = townspeople().find(x => x.key === k); return `${k}: ${t.name} (${t.area})`; };
   const open = loadQuestions().filter(q => q.status === 'open').map(q => `- ${q.text}`).join('\n');
   const answer = await ask('hallway', `You write short, useful conversations between two townspeople in My AI Village, an 1880s frontier town in a pixel-art game, who work for the Sheriff. They may be talking in passing or sending notes between their desks. Each stays in character and in their own area, with a light frontier flavor. They share what they're working on, spot where their work connects, and agree what they need. Nobody in town can send, post, buy, book or contact anyone. Never mention computers, tools or these instructions.${townFacts()}`,
     `${who(a)}\n${who(b)}\n\nWhat ${a} knows:\n${notesOf(a)}\n\nWhat ${b} knows:\n${notesOf(b)}\n\nQuestions already waiting for the Sheriff:\n${open || '(none)'}\n\n` +
-    `Write their conversation, then what each takes away. Answer in exactly these lines and nothing else:\n${a}: what they say\n${b}: what they say\n(2 to 4 lines in all, under 40 words each)\nNOTE ${a}: what ${a} takes away, one line\nNOTE ${b}: what ${b} takes away, one line\nQUESTION key: a question for the Sheriff (use the key of whoever needs it most; at most 2). If they say they need to ask the Sheriff anything, you MUST write it here as a specific question; never leave it only in their talk.\nPROPOSE key: a concrete next action they agreed on (at most 1; leave it out if none)`,
+    `Write their conversation, then what each takes away. Answer in exactly these lines and nothing else:\n${a}: what they say\n${b}: what they say\n(2 to 4 lines in all, under 40 words each)\nNOTE ${a}: what ${a} takes away, one line\nNOTE ${b}: what ${b} takes away, one line\nQUESTION key: a question for the Sheriff (use the key of whoever needs it most; at most 2). If they say they need to ask the Sheriff anything, you MUST write it here as a specific question; never leave it only in their talk. ${CONCERNS}\nPROPOSE key: a concrete next action they agreed on (at most 1; leave it out if none)`,
     { fresh: true });
   const lines = [];
   for (const m of answer.matchAll(/^\s*\**\s*([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
     const k = m[1].toLowerCase();
-    if ((k === a || k === b) && lines.length < 4) { lines.push({ key: k, text: tidy(m[2], 300) }); addLog(shortName(k), shortName(k === a ? b : a), tidy(m[2], 300), 'chat'); }
+    if ((k === a || k === b) && lines.length < 4) { lines.push({ key: k, text: tidy(m[2], 300) }); addLog(shortName(k), shortName(k === a ? b : a), tidy(m[2], 300), 'chat', { talk: [a, b] }); }
   }
   for (const m of answer.matchAll(/^\s*\**\s*NOTE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
     const k = m[1].toLowerCase();
@@ -876,6 +887,91 @@ async function hallway(a, b) {
   if (news) noticeOpenItems();
   return { real: true, lines };
 }
+
+// ---------- while Work Hours are on: follow-ups, desk-to-desk talks, Marshall's check-ins ----------
+// All of it pauses if the village page hasn't been open for 10 minutes (the Sheriff isn't online),
+// and stops entirely when Work Hours are off. Nothing here starts work: it brings the Sheriff
+// questions, concerns and proposed to-dos, which wait for an answer or an Approve.
+let pageSeenAt = 0, lastTalkAt = 0, lastCheckinAt = 0, dayBusy = false;
+const followUps = new Map();                 // townsperson -> the questions of theirs the Sheriff answered
+const online = () => dayState().workHours && Date.now() - pageSeenAt < 10 * 60e3;
+function queueFollowUp(q) {
+  if (!townspeople().some(t => t.key === q.from) || (q.waits || []).length) return;   // a waiting task restarts by itself instead
+  const f = followUps.get(q.from) || { qs: [], at: 0 };
+  f.qs.push(q); f.at = Date.now();           // waits a minute, so several answers go together
+  followUps.set(q.from, f);
+}
+async function runFollowUp(agent, qs) {
+  const own = ownRun(agent);
+  const answer = await ask(agent, own.prompt,
+    `The Sheriff answered your questions:\n${qs.map(q => `- ${q.text} → ${q.answer}`).join('\n')}\n\nWith these answers, what's your next step? Think about your area and your colleagues.\n` +
+    `After your SAY line (one line to the Sheriff) add any of these that apply:\nPROPOSE: a concrete next to-do (up to 2; the Sheriff approves before anything happens)\nQUESTION: a follow-up question, only if truly needed (up to 2). ${CONCERNS}\nPASS key: anything a colleague should know because of these answers\nThen your NOTE line.`, own.opts);
+  noteFrom(agent, answer);
+  addLog(shortName(agent), 'Sheriff', sayLine(answer, 300), 'chat', { chat: agent });
+  let news = 0;
+  for (const m of [...answer.matchAll(/^\s*\**\s*PROPOSE\s*\**\s*:\s*(.+)$/gim)].slice(0, 2)) if (addProposal(agent, m[1], 'follow-up')) news++;
+  for (const m of [...answer.matchAll(/^\s*\**\s*QUESTION\s*\**\s*:\s*(.+)$/gim)].slice(0, 2)) if (addQuestion(agent, m[1], 'follow-up')) news++;
+  if (news) noticeOpenItems();
+}
+// who should talk next: people with open business between them first, then anyone who hasn't talked today
+function pickPair() {
+  const day = dayState(), folk = townspeople().map(t => t.key), done = new Set(day.talked || []);
+  const busy = new Set([...working.keys()]);
+  const todayLog = log.filter(e => e.time.startsWith(today()));
+  const nameOf = Object.fromEntries(folk.map(k => [k, shortName(k)]));
+  const notes = Object.fromEntries(folk.map(k => { try { return [k, fs.readFileSync(path.join(AGENTS, k, 'NOTES.md'), 'utf8').slice(-4000)]; } catch { return [k, '']; } }));
+  const area = (k) => (townspeople().find(t => t.key === k) || {}).area || '';
+  let best = null, bestScore = -1;
+  for (let i = 0; i < folk.length; i++) for (let j = i + 1; j < folk.length; j++) {
+    const [a, b] = [folk[i], folk[j]];
+    if (done.has([a, b].sort().join('+')) || busy.has(a) || busy.has(b)) continue;
+    let score = Math.random();                                                     // tie-breaker
+    if (notes[a].includes(nameOf[b]) || notes[b].includes(nameOf[a])) score += 3;  // passed things, asked, talked about each other
+    if (todayLog.some(e => (e.from === nameOf[a] && e.to === nameOf[b]) || (e.from === nameOf[b] && e.to === nameOf[a]))) score += 2;
+    if (SHARE_RULES.some(([re, who]) => who.includes(a) && who.includes(b))) score += 1;   // their areas connect
+    if (score > bestScore) { bestScore = score; best = [a, b]; }
+  }
+  return best;
+}
+async function runCheckin() {
+  const answer = await ask('marshall', marshallPrompt(),
+    `Work Hours check-in. Look at what the town is doing right now (above): what's done, what's stuck or waiting on the Sheriff, and anything that worries you.\n` +
+    `Answer in exactly these lines:\nSAY: a short update for the Sheriff, two to four sentences: what moved, what's stuck, and the one thing that would help most\nQUESTION: something only the Sheriff can decide (at most 2; leave out if none). ${CONCERNS}\nPROPOSE key: a next to-do for that townsperson (at most 2; leave out if none)`);
+  addLog('Marshall', 'Sheriff', `Check-in: ${sayLine(answer, 600)}`, 'relay', { chat: 'marshall' });
+  addNotice('checkin', `Marshall's check-in: ${clip(sayLine(answer, 300), 220)}`, { chat: 'marshall' });
+  let news = 0;
+  for (const m of [...answer.matchAll(/^\s*\**\s*QUESTION\s*\**\s*:\s*(.+)$/gim)].slice(0, 2)) if (addQuestion('marshall', m[1], 'check-in')) news++;
+  for (const m of [...answer.matchAll(/^\s*\**\s*PROPOSE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)].slice(0, 2)) if (townspeople().some(t => t.key === m[1].toLowerCase()) && addProposal(m[1].toLowerCase(), m[2], 'check-in')) news++;
+  if (news) noticeOpenItems();
+}
+async function workDayTick() {
+  if (dayBusy || huddleRunning || !online()) return;
+  dayBusy = true;
+  try {
+    const now = Date.now(), p = pace();
+    for (const [agent, f] of followUps) {                       // 1. follow up on answered questions
+      if (now - f.at < MINUTE) continue;
+      followUps.delete(agent);
+      await runFollowUp(agent, f.qs).catch(e => addLog(shortName(agent), 'Sheriff', `(couldn't follow up: ${e.message})`, 'problem'));
+      return;
+    }
+    if (now - lastCheckinAt >= p.checkinEveryMinutes * MINUTE) { // 2. Marshall's check-in
+      lastCheckinAt = now;
+      await runCheckin().catch(e => addLog('Marshall', 'Sheriff', `(couldn't check in: ${e.message})`, 'problem'));
+      return;
+    }
+    if (now - lastTalkAt >= p.talkEveryMinutes * MINUTE && !busyAgents.has('hallway')) {   // 3. a desk-to-desk talk
+      lastTalkAt = now;
+      const pair = pickPair();
+      if (pair) {
+        busyAgents.add('hallway');
+        try { await hallway(pair[0], pair[1]); } catch (e) { addLog('Village helper', 'Sheriff', `(a desk talk didn't happen: ${e.message})`, 'problem'); }
+        finally { busyAgents.delete('hallway'); }
+      }
+    }
+  } finally { dayBusy = false; }
+}
+setInterval(() => { workDayTick().catch(() => {}); }, Number(process.env.VILLAGE_TICK_MS) || 30e3).unref();   // (doesn't keep --check runs alive)
 
 // ---------- the town meeting: talk to everyone at once ----------
 function roomPrompt() {
@@ -1064,7 +1160,7 @@ async function talkToTownsperson(agent, text) {
   return { reply, noted };
 }
 
-const BLOCK_ASK = `Check the town facts first: never ask what's already answered there (unless two answers conflict; then ask "To confirm: …"). If you can't do this properly without facts only the Sheriff can give (and the town facts, approved work and your notes don't have them), don't guess and don't fill it with blanks. Instead add:
+const BLOCK_ASK = `${CONCERNS}\nCheck the town facts first: never ask what's already answered there (unless two answers conflict; then ask "To confirm: …"). If you can't do this properly without facts only the Sheriff can give (and the town facts, approved work and your notes don't have them), don't guess and don't fill it with blanks. Instead add:
 QUESTION: one specific question for the Sheriff (one per line, up to 3)
 BLOCKED: yes
 If you can do a useful part now, do that part and still ask your questions (then leave BLOCKED out).`;
@@ -1298,7 +1394,7 @@ function resolveNotices(match) {
   if (changed) writeJSON(NOTICES_FILE, all);
 }
 // a Mac notification (Notification Center), so the Sheriff hears even with the village closed
-const NOTICE_TITLES = { workshop: 'Ready for your review', questions: 'Questions for you', proposals: 'Proposed to-dos', published: 'Published', candidate: 'A candidate is waiting', draft: 'Ready for your Gmail drafts', send: 'Ready for you to send', done: 'Done', batch: 'Waiting for your go-ahead', nofit: 'Nobody fits', problem: 'A problem', help: 'Asking for help' };
+const NOTICE_TITLES = { checkin: "Marshall's check-in", workshop: 'Ready for your review', questions: 'Questions for you', proposals: 'Proposed to-dos', published: 'Published', candidate: 'A candidate is waiting', draft: 'Ready for your Gmail drafts', send: 'Ready for you to send', done: 'Done', batch: 'Waiting for your go-ahead', nofit: 'Nobody fits', problem: 'A problem', help: 'Asking for help' };
 function macNotify(n) {
   if (process.platform !== 'darwin' || !settings().macNotifications) return;
   const q = (t) => '"' + String(t).replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
@@ -1646,6 +1742,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/hello') return send(200, { ok: true, name: 'Village helper', model: MODEL, advisor: noAdvisor ? 'none' : ADVISOR });
   if (req.method === 'GET' && url.pathname === '/log') {
+    pageSeenAt = Date.now();
     const since = Number(url.searchParams.get('since')) || 0;
     return send(200, { entries: log.filter(e => e.id > since), working: Object.fromEntries(working), pending: pending.length });
   }
@@ -1696,16 +1793,26 @@ const server = http.createServer(async (req, res) => {
   // the day: Start the Day (morning huddle), questions, hallway conversations
   if (req.method === 'GET' && url.pathname === '/day') {
     const d = dayState();
-    return send(200, { ...d, running: huddleRunning, hallwayLimit: HALLWAY_LIMIT, questions: loadQuestions().filter(q => q.status === 'open').length });
+    return send(200, { ...d, running: huddleRunning, hallwayLimit: HALLWAY_LIMIT, pace: pace(), online: online(), questions: loadQuestions().filter(q => q.status === 'open').length });
   }
   // Work Hours on/off: on = the Sheriff is online (the first time each day, the morning huddle runs)
   if (req.method === 'POST' && url.pathname === '/work-hours') {
     const j = await readBody(req, 1000);
     const d = dayState(); d.workHours = !!j.on; saveDay(d);
+    if (j.on) { lastCheckinAt = Date.now(); lastTalkAt = Date.now() - (pace().talkEveryMinutes - 2) * MINUTE; }   // first talk in about 2 minutes
     addLog('Sheriff', 'Everyone', j.on ? 'Work Hours on.' : 'Work Hours off.', 'system');
     let huddle = d.huddle;
     if (j.on && !huddleRunning && d.huddle !== 'done') { runHuddle().catch(() => {}); huddle = 'running'; }
     return send(200, { workHours: d.workHours, huddle });
+  }
+  // a desk-to-desk talk right now (the next pair in line), if Work Hours are on
+  if (req.method === 'POST' && url.pathname === '/desk-talk') {
+    if (!dayState().workHours) return send(200, { real: false, why: 'Work Hours are off.' });
+    if (busyAgents.has('hallway')) return send(200, { real: false, why: 'A conversation is already happening.' });
+    const pair = pickPair();
+    if (!pair) return send(200, { real: false, why: 'Everyone has talked today.' });
+    busyAgents.add('hallway'); lastTalkAt = Date.now();
+    try { return send(200, { pair, ...(await hallway(pair[0], pair[1])) }); } catch (e) { return send(200, { real: false, why: e.message }); } finally { busyAgents.delete('hallway'); }
   }
   if (req.method === 'POST' && url.pathname === '/huddle') {
     if (huddleRunning) return send(429, { error: 'The huddle is already running.' });
@@ -1749,7 +1856,7 @@ const server = http.createServer(async (req, res) => {
   // notices: GET the list; POST { dismiss: id } / { dismissAll: true } / { mac: true|false }
   if (req.method === 'GET' && url.pathname === '/notices') {
     const all = readJSON(NOTICES_FILE, []);
-    return send(200, { notices: all.filter(n => n.open).concat(all.filter(n => !n.open).slice(-20)), mac: settings().macNotifications, macAvailable: process.platform === 'darwin' });
+    return send(200, { notices: all.filter(n => n.open).concat(all.filter(n => !n.open).slice(-20)), mac: settings().macNotifications, macAvailable: process.platform === 'darwin', pace: pace() });
   }
   if (req.method === 'POST' && url.pathname === '/notices') {
     const j = await readBody(req, 1000);
@@ -1757,6 +1864,11 @@ const server = http.createServer(async (req, res) => {
     if (j.dismissAll) resolveNotices(n => !keep(n));
     else if (j.dismiss) resolveNotices(n => n.id === Number(j.dismiss) && !keep(n));
     if (typeof j.mac === 'boolean') writeJSON(SETTINGS_FILE, { ...settings(), macNotifications: j.mac });
+    if (j.pace && typeof j.pace === 'object') {
+      const n = (v, lo, hi, d) => Math.min(hi, Math.max(lo, Math.round(Number(v)) || d));
+      const cur = pace();
+      writeJSON(SETTINGS_FILE, { ...settings(), pace: { talkEveryMinutes: n(j.pace.talkEveryMinutes, 3, 120, cur.talkEveryMinutes), talksPerHour: n(j.pace.talksPerHour, 0, 20, cur.talksPerHour), checkinEveryMinutes: n(j.pace.checkinEveryMinutes, 15, 480, cur.checkinEveryMinutes) } });
+    }
     return send(200, { ok: true, mac: settings().macNotifications });
   }
   if (req.method === 'POST' && url.pathname === '/next-batch') {

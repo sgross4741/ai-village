@@ -100,6 +100,8 @@
   #notice-list .text { flex: 1 1 100%; order: 3; }
   #notice-list .time { margin-left: auto; font-size: 11px; color: #8c765e; }
   #notice-empty { color: #c9b496; font-size: 12px; padding: 8px 10px; }
+  #pace-row { padding: 6px 10px; border-bottom: 2px solid #7e4f2c; font-size: 12px; color: #c9b496; line-height: 2; }
+  #pace-row input { width: 3.2em; font: inherit; color: #2e1d14; background: #f1e6c8; border: 1px solid #7e4f2c; padding: 1px 3px; }
   /* the General Store: everything made in the Workshop */
   #store { top: 56px; left: 50%; transform: translateX(-50%); width: min(860px, calc(100vw - 32px)); height: min(560px, calc(100vh - 150px)); display: flex; flex-direction: column; padding: 0; z-index: 16; }
   #store.hidden { display: none; }
@@ -215,6 +217,7 @@
 <div id="notices" class="panel hidden">
   <header><span class="title">Notices<span class="sub">What Marshall needs you for. Click one to go to it.</span></span><button class="x" id="notices-close" title="Close (Esc)">×</button></header>
   <div id="mac-row"><button class="btn small" id="mac-toggle">Mac notifications: On</button><button class="btn small" id="notices-clear">Clear all</button></div>
+  <div id="pace-row" title="While Work Hours are on">Work Hours pace: a colleague talk every <input id="pace-talk" type="number" min="3" max="120"> min, at most <input id="pace-hour" type="number" min="0" max="20"> an hour; Marshall checks in every <input id="pace-checkin" type="number" min="15" max="480"> min</div>
   <ul id="notice-list"></ul>
   <div id="notice-empty">Nothing needs you right now.</div>
 </div>

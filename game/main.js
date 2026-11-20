@@ -383,6 +383,7 @@
           if (e.workshop) pollWorkshop().then(() => sayIn(key, '', e.workshop, 'workshopbtn'));
         }
         if (firstPoll) remember(e);                // after a reload: rebuild each chat's history from the log
+        if (e.talk && !firstPoll) for (const k of e.talk) { const q = people.find(x => x.key === k); if (q) q.letter = performance.now() + 9000; }
       }
       if (firstPoll) restoreHistory();
       firstPoll = false;
@@ -824,12 +825,17 @@
   // Click a notice to go to it. (Mac notifications come from the helper.)
   const noticesEl = $('notices'), noticeList = $('notice-list'), noticeEmpty = $('notice-empty'), toastEl = $('toast'), macBtn = $('mac-toggle');
   let notices = [], lastNoticeId = null, macOn = true, toastTimer = 0;
-  const NOTICE_LABEL = { questions: 'Questions', workshop: 'Needs your review', proposals: 'Proposed to-dos', candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
+  const NOTICE_LABEL = { checkin: "Marshall's check-in", questions: 'Questions', workshop: 'Needs your review', proposals: 'Proposed to-dos', candidate: 'Candidate waiting', draft: 'Gmail draft?', send: 'Ready to send', done: 'Done', batch: 'Your go-ahead', nofit: 'Nobody fits', problem: 'Problem', help: 'Needs help' };
   function openNotices() { noticesEl.classList.remove('hidden'); toastEl.style.display = 'none'; pollNotices(); }
   function closeNotices() { noticesEl.classList.add('hidden'); }
   function toggleNotices() { noticesEl.classList.contains('hidden') ? openNotices() : closeNotices(); }
   $('notices-close').addEventListener('click', closeNotices);
   $('notices-clear').addEventListener('click', async () => { try { await fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dismissAll: true }) }); } catch { /* */ } pollNotices(); });
+  for (const id of ['pace-talk', 'pace-hour', 'pace-checkin']) $(id).addEventListener('change', async () => {
+    const pace = { talkEveryMinutes: $('pace-talk').value, talksPerHour: $('pace-hour').value, checkinEveryMinutes: $('pace-checkin').value };
+    try { await fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pace }) }); } catch { /* */ }
+    pollNotices();
+  });
   macBtn.addEventListener('click', async () => {
     try { const r = await fetch(HELPER + '/notices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mac: !macOn }) }); macOn = (await r.json()).mac; } catch { /* */ }
     renderNotices();
@@ -881,6 +887,9 @@
       const j = await (await fetch(HELPER + '/notices')).json();
       notices = j.notices || []; macOn = j.mac !== false;
       $('mac-row').style.display = j.macAvailable ? '' : 'none';
+      if (j.pace && document.activeElement && !document.activeElement.closest('#pace-row')) {
+        $('pace-talk').value = j.pace.talkEveryMinutes; $('pace-hour').value = j.pace.talksPerHour; $('pace-checkin').value = j.pace.checkinEveryMinutes;
+      }
       const newest = notices.filter(n => n.open).reduce((m, n) => (n.id > (m ? m.id : 0) ? n : m), null);
       if (lastNoticeId !== null && newest && newest.id > lastNoticeId) toast(newest);
       lastNoticeId = Math.max(lastNoticeId || 0, ...notices.map(n => n.id));
@@ -1096,23 +1105,12 @@
     } catch { /* helper not running: the town still goes to work, but nobody thinks */ }
     renderDay();
   }
-  // desk to desk: while Work Hours are on, every few minutes two colleagues who haven't talked today exchange notes
-  const DESK_TALK_EVERY = 4 * 60 * 1000;
-  let lastDeskTalk = performance.now();
-  function deskTalk() {
-    if (!state.workTime || state.meeting) return false;
-    const folk = people.filter(q => !q.isWorker && !q.isCandidate);
-    const pairs = [];
-    for (let i = 0; i < folk.length; i++) for (let j = i + 1; j < folk.length; j++) if (!talkedToday(folk[i], folk[j])) pairs.push([folk[i], folk[j]]);
-    if (!pairs.length) return false;
-    const [a, b] = pairs[Math.floor(Math.random() * pairs.length)];
-    const until = performance.now() + 9000;
-    a.letter = until; b.letter = until;                      // a speech bubble over both while they talk
-    recordChat(a, b);
-    lastDeskTalk = performance.now();
-    return [a.key, b.key];
+  // desk to desk: while Work Hours are on, the helper keeps a steady pace of talks between colleagues
+  // (people with business between them first); the page just shows who's talking. "Talk now" for testing:
+  async function deskTalk() {
+    try { const r = await fetch(HELPER + '/desk-talk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); return await r.json(); }
+    catch { return { real: false, why: "The village helper isn't running." }; }
   }
-  setInterval(() => { if (state.workTime && performance.now() - lastDeskTalk > DESK_TALK_EVERY) deskTalk(); }, 20000);
   const questionsBtn = document.createElement('button');
   questionsBtn.textContent = 'Questions'; questionsBtn.title = 'What the town needs to know from you (shortcut: Q)'; questionsBtn.style.cssText = btnCss;
   questionsBtn.addEventListener('click', () => { toggleQuestions(); questionsBtn.blur(); });
