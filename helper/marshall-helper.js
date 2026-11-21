@@ -226,6 +226,31 @@ function logsText() {
   return `\n\n## Village logs (from the helper)\n${runs}\nTo-dos: ${todos.filter(t => t.status !== 'done' && t.status !== 'declined').length} open, ${todos.filter(t => t.status === 'done').length} done.\nRecent activity:\n${recent || '(none yet)'}`;
 }
 
+// ---------- your Claude limits (the health bar) ----------
+// Claude Code reports your plan's 5-hour and weekly usage with every run; the helper keeps the latest.
+// These are your whole account's limits (claude.ai, Claude Code and the village together).
+const LIMITS_FILE = path.join(HOME, 'limits.json');
+function updateLimits(info) {
+  const w = info.unifiedWindows || {};
+  const pick = (x) => x ? { utilization: Number(x.utilization) || 0, resetsAt: x.resetsAt || null, status: x.status || 'allowed' } : null;
+  const prev = readJSON(LIMITS_FILE, {});
+  const next = { fiveHour: pick(w.five_hour) || prev.fiveHour || null, weekly: pick(w.seven_day) || prev.weekly || null,
+    extraUsage: info.isUsingOverage ? 'in use' : (info.overageStatus === 'rejected' ? 'off' : (info.overageStatus || 'unknown')), updated: new Date().toISOString() };
+  writeJSON(LIMITS_FILE, next);
+  for (const [name, win] of [['5-hour', next.fiveHour], ['weekly', next.weekly]]) {   // one heads-up each time a limit passes 90%
+    if (!win) continue;
+    const old = name === '5-hour' ? prev.fiveHour : prev.weekly;
+    if (win.utilization >= 0.9 && (!old || old.utilization < 0.9)) addNotice('problem', `Your ${name} Claude limit is ${Math.round(win.utilization * 100)}% used${win.resetsAt ? `; it refills ${new Date(win.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}.`, { log: true });
+  }
+}
+let refreshingLimits = false;
+async function refreshLimits() {        // one tiny run on the smallest model, only when the Sheriff asks
+  if (refreshingLimits) return readJSON(LIMITS_FILE, {});
+  refreshingLimits = true;
+  try { await ask('limits', 'Reply with one word.', 'hi', { fresh: true, model: 'haiku' }); } finally { refreshingLimits = false; }
+  return readJSON(LIMITS_FILE, {});
+}
+
 // ---------- the lockdown on every Claude Code run ----------
 // - No built-in tools at all (--tools ""): no files, commands, web, scheduling or sub-agents.
 // - None of your own Claude Code settings, plugins, hooks or skills (--setting-sources project,
@@ -297,7 +322,7 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     const promptFile = path.join(HOME, `prompt-${agent}${tools ? '-tools' : ''}.md`);
     fs.writeFileSync(promptFile, systemPrompt);
     const build = () => {
-      const args = ['-p', message, '--model', opts.model || (isWorker ? WORKER_MODEL : MODEL), '--output-format', 'json',
+      const args = ['-p', message, '--model', opts.model || (isWorker ? WORKER_MODEL : MODEL), '--output-format', 'stream-json', '--verbose',
         ...lockdown(agent, tools),
         '--permission-mode', 'dontAsk', '--max-turns', tools ? '10' : '2',
         // send the current notes, town facts and approved work with every message (Claude Code otherwise
@@ -332,8 +357,13 @@ async function ask(agent, systemPrompt, message, opts = {}) {
     checkToolAttempts();
 
     if (run.spawnError) throw new Error(`Couldn't start Claude Code ("${CLAUDE}"). Is it installed and on your PATH? (${run.err})`);
-    let obj;
-    try { obj = JSON.parse(run.out); } catch { throw new Error(`Claude Code didn't answer as expected. ${(run.err || run.out).trim().slice(0, 300)}`); }
+    let obj = null;
+    for (const line of run.out.split('\n')) {          // a stream of events: the limits along the way, the result at the end
+      let ev; try { ev = JSON.parse(line); } catch { continue; }
+      if (ev.type === 'rate_limit_event' && ev.rate_limit_info) updateLimits(ev.rate_limit_info);
+      if (ev.type === 'result') obj = ev;
+    }
+    if (!obj) throw new Error(`Claude Code didn't answer as expected. ${(run.err || run.out).trim().slice(-300)}`);
     if (opts.result) opts.result(obj);
     if (obj.session_id && !fresh) s.sessionId = obj.session_id;
     if (fresh) return typeof obj.result === 'string' ? obj.result : '';
@@ -1740,6 +1770,10 @@ const server = http.createServer(async (req, res) => {
     return res.end(fs.readFileSync(file));
   }
 
+  if (req.method === 'GET' && url.pathname === '/limits') return send(200, readJSON(LIMITS_FILE, {}));
+  if (req.method === 'POST' && url.pathname === '/limits') {
+    try { return send(200, await refreshLimits()); } catch (e) { return send(500, { error: e.message }); }
+  }
   if (req.method === 'GET' && url.pathname === '/hello') return send(200, { ok: true, name: 'Village helper', model: MODEL, advisor: noAdvisor ? 'none' : ADVISOR });
   if (req.method === 'GET' && url.pathname === '/log') {
     pageSeenAt = Date.now();

@@ -1171,6 +1171,40 @@
     questionEmpty.style.display = open.length ? 'none' : 'block';
   }
 
+  // ---------- the health bar: your Claude limits ----------
+  // Full bar = allowance left. Green, then yellow under 25% left, red under 10%. Updated from every
+  // village run; clicking checks right now (one tiny Claude run on the smallest model).
+  const limitsEl = $('limits');
+  const refill = (ts) => {
+    if (!ts) return '';
+    const ms = ts * 1000 - Date.now();
+    if (ms <= 0) return 'now';
+    const h = Math.floor(ms / 3600e3), m = Math.round((ms % 3600e3) / 60e3);
+    return h >= 24 ? new Date(ts * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : `${h ? h + 'h ' : ''}${m}m`;
+  };
+  function showLimits(j) {
+    for (const [id, win] of [['lim-5h', j.fiveHour], ['lim-wk', j.weekly]]) {
+      const fill = $(id), val = $(id + '-val');
+      if (!win) { fill.style.width = '0'; val.textContent = '?'; continue; }
+      const left = Math.max(0, 1 - win.utilization);
+      fill.style.width = (left * 100).toFixed(0) + '%';
+      fill.className = 'fill' + (left < 0.1 ? ' low' : left < 0.25 ? ' warn' : '');
+      val.textContent = Math.round(left * 100) + '%';
+    }
+    $('lim-when').textContent = j.fiveHour || j.weekly
+      ? `Refills: 5-hour in ${refill(j.fiveHour && j.fiveHour.resetsAt) || '?'} · weekly ${refill(j.weekly && j.weekly.resetsAt) || '?'}`
+      : 'Click to check your limits';
+    limitsEl.title = `Allowance left on your Claude plan (claude.ai, Claude Code and the village together).${j.updated ? ' Last updated ' + new Date(j.updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '.' : ''} Extra usage: ${j.extraUsage || 'unknown'}. Click to check now (one tiny run).`;
+  }
+  async function pollLimits() { try { showLimits(await (await fetch(HELPER + '/limits')).json()); } catch { /* helper not running */ } }
+  limitsEl.addEventListener('click', async () => {
+    $('lim-when').textContent = 'Checking…';
+    try { const r = await fetch(HELPER + '/limits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); showLimits(await r.json()); }
+    catch { $('lim-when').textContent = "The village helper isn't running."; }
+  });
+  setInterval(pollLimits, 20000);
+  pollLimits();
+
   // ---------- each frame ----------
   function update(dt) {
     state.player.scene = state.scene;
