@@ -63,6 +63,18 @@ Marshall is always looking for ways to make the team better. When a townsperson 
 - **Not hired:** they walk out of town.
 - Limits: one candidate at a time; at most 3 workers per townsperson (what a yard fits); a townsperson asks for help at most once a day. Finding a candidate is one Claude run.
 
+## Letting someone go
+
+Only you can let anyone go, and nothing happens until you confirm.
+
+- **From their chat box:** walk up, press **T**, press **Let go** at the top, add a reason if you like (it goes in their handover), then **Let go** again. Or tell Marshall ("let Biscuit go because…"); Marshall asks "To be sure?" and you confirm with the **Let go** button in Marshall's chat.
+- **Not mid-job:** someone in the middle of a job (or a townsperson whose worker is) can't be let go until it's finished.
+- **Handover note:** before they leave, they write one (one Claude run): what they know, work in progress, questions still waiting on you, and promises to colleagues. Then they walk out of town on the south road.
+- **Nothing is deleted:** their instructions, notes and handover are kept in `agents/archive/<name>-<date>/` on your computer (not saved to GitHub).
+- **A worker:** their handover goes to the end of their townsperson's notes.
+- **A townsperson:** their seat stays: the house, the area, their workers, their open work and their questions to you. Marshall finds someone to take over (one Claude run) who looks just like the person who left (no new art, no credits), and you interview them at the town hall like any candidate. **Hire** them and they move in, start with the handover note in their notes, and pick up the waiting work; **Not this one** and Marshall finds someone else. Until then, Marshall hands nobody work in that area.
+- **Everyone keeps up:** colleagues are told who left and who took over, and old names in everyone's instructions now mean the new person. The successor's instructions live in `helper/marshall-home/staff/`, so the files saved in GitHub never change.
+
 ## Work Hours: when you're online
 
 **Work Hours** (first button in the toolbar) is your "I'm online" switch.
@@ -123,6 +135,12 @@ Anything Marshall needs you for shows on the **Notices** button (or press **N**)
 
 On a Mac, the helper also shows them as **Mac notifications**, even when the village isn't open. Turn them off or on with the switch at the top of the Notices list.
 
+## Health bar: your Claude limits
+
+Under the place name (top left), two bars show how much of your **5-hour** and **weekly** Claude limits is left, and when each refills. They turn yellow under 25% left and red under 10%, and Marshall raises a notice when either passes 90% used. These are your whole account's limits (shared with claude.ai and Claude Code), not just the village's.
+
+The numbers update for free with every village run. Click the bar to refresh it now: that's one tiny Haiku run, and it only happens when you click.
+
 ## The General Store (the Workshop): websites, documents and spreadsheets
 
 The General Store stands east of House 6, on the main street where it leads out of town. When a task asks for something real to be made, whoever makes it walks to a free workbench in the store and works there; their townsperson checks it like any other work. Agents still have no tools: they write the files in their answer and the helper saves them in the `workshop/` folder, accepting only simple web and text files (.html .css .js .svg .md .txt .csv .json) with plain names.
@@ -154,7 +172,9 @@ Everything stays in `helper/marshall-home/` on your computer:
 - `village-log.jsonl`: the chat log (orders, hand-offs, reports).
 - `orders.json`: every task Marshall handed out, who got it, and whether they reported back.
 - `todos.json`: your to-do list, with who did each item and exactly what they did.
-- `hiring.json`: the candidate waiting at the town hall, and everyone interviewed so far.
+- `hiring.json`: the candidate waiting at the town hall, everyone interviewed so far, and who was let go (and any empty seat).
+- `staff/`: the instructions of anyone who took over a townsperson's seat.
+- `limits.json`: your latest 5-hour and weekly limits, for the health bar.
 - `notices.json` and `settings.json`: Marshall's notices, whether Mac notifications are on, and where websites are published.
 - `workshop.json` and `pages-repo/`: what's in the workshop, and the copy of your website repository the Publish button uses.
 - `runs-log.csv`: one line per Claude Code run (who, time taken, tokens), for the build log. The cost column is Claude Code's own estimate of what the same work would cost on the API. On your subscription, nothing is billed per use.

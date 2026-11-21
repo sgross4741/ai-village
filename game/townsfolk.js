@@ -251,7 +251,8 @@ function walk(a, dt, nav, occ, speed) {
 
   // step into the next square only if nobody holds it
   const next = a.path[0];
-  if (!isFree(occ, a, a.scene, ...next)) {
+  // (someone leaving town slips past whoever is in the way after a moment: they never get stuck in town)
+  if (!isFree(occ, a, a.scene, ...next) && !(a.leaving && (a.blockedFor || 0) > 1.2)) {
     a.blockedFor = (a.blockedFor || 0) + dt;
     if (a.blockedFor > 0.5) a.repath = true;                 // look for a way around
     if (a.blockedFor > 2.5) { a.blockedFor = 0; sidestep(a, nav, occ, null); }   // still stuck: step aside
@@ -300,6 +301,14 @@ function createTownsfolk(town, nav) {
 // ctx: { nav, occ, sheriff, meeting: {seat(i)} | null, workTime, talkedToday(a,b), recordChat(a,b) }
 function updateTownsperson(p, i, dt, ctx, everyone) {
   const { nav, occ, sheriff } = ctx;
+  if (p.vacant) return;                       // an empty seat: nobody there until the Sheriff hires a replacement
+
+  // Let go by the Sheriff: walk out of town on the south road (no stopping to chat)
+  if (p.leaving && !p.isCandidate) {
+    p.seated = false; p.chat = null; p.attending = false;
+    if (walk(p, dt, nav, occ, STROLL_SPEED) === 'arrived') { p.moving = false; p.gone = true; }
+    return;
+  }
 
   // 0. The Sheriff walked into them: step aside to a free neighboring tile.
   if (p.yieldTo) {
@@ -459,11 +468,11 @@ function makeWorker(info, i, town, townsfolk, at, everyone) {
 // A candidate Marshall found: walks in on the south road to the town hall and waits there
 // for the Sheriff's interview. Not hired: walks back out of town.
 function makeCandidate(c, town, nav, hall, waitTile, townsfolk) {
-  const boss = townsfolk.find(t => t.key === c.owner);
+  const boss = c.replaces ? null : townsfolk.find(t => t.key === c.owner);
   const entry = nav.entry;
   return {
-    key: c.key, name: c.name, owner: c.owner, isCandidate: true, boss,
-    area: `Candidate to work for ${boss ? boss.name.split(' ')[0] : 'a townsperson'} (${boss ? boss.area : ''})`,
+    key: c.key, name: c.name, owner: c.owner, isCandidate: true, boss, replaces: c.replaces || null, seatArea: c.area,
+    area: c.replaces ? `Candidate to take over ${c.area}` : `Candidate to work for ${boss ? boss.name.split(' ')[0] : 'a townsperson'} (${boss ? boss.area : ''})`,
     building: null, room: null, rng: rng(5100 + c.key.length * 13), yardSpots: [], roomSpots: [],
     scene: town, ...centre(entry), dir: 'up', moving: false, t: 0, path: [],
     goal: { scene: hall, tile: waitTile }, mode: 'candidate', seated: false, attending: false, chat: null, tasks: [],

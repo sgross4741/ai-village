@@ -89,6 +89,13 @@
   /* hiring: decide on a candidate in their chat box */
   #hire-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; border-top: 2px solid #7e4f2c; }
   #hire-row.hidden { display: none; }
+  /* letting someone go: a confirm step in their chat box (or Marshall's) */
+  #let-go { margin-left: auto; margin-right: 6px; font-size: 11px; padding: 2px 8px; }
+  #let-go.hidden, #letgo-row.hidden { display: none; }
+  #letgo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; border-top: 2px solid #7e4f2c; background: #3a2216; }
+  #letgo-hint { flex: 1 1 100%; font-size: 12px; color: #f1c27d; }
+  #letgo-reason { flex: 1 1 100%; font: inherit; font-size: 12px; padding: 4px 6px; background: #f1e6c8; color: #2e1d14; border: 2px solid #7e4f2c; }
+  #letgo-reason.hidden { display: none; }
   #hire-hint { flex: 1 1 100%; font-size: 12px; color: #c9b496; }
   #hire-yes { background: #4f7a2c; }
   /* notices: what Marshall needs the Sheriff for */
@@ -208,9 +215,10 @@
 </div>
 <div id="brain" class="panel">Village brains: checking…</div>
 <div id="chat" class="panel side hidden">
-  <header><span class="title" id="chat-title">Marshall</span><button class="x" id="chat-close" title="Close (Esc)">×</button></header>
+  <header><span class="title" id="chat-title">Marshall</span><button class="btn hidden" id="let-go" title="Let this person go (you confirm first)">Let go</button><button class="x" id="chat-close" title="Close (Esc)">×</button></header>
   <div class="lines" id="chat-lines"></div>
   <button class="btn hidden" id="next-batch">Send next batch</button>
+  <div id="letgo-row" class="hidden"><span id="letgo-hint"></span><input id="letgo-reason" maxlength="300" placeholder="Why? (optional, goes in their handover)"><button class="btn" id="letgo-yes">Let go</button><button class="btn" id="letgo-no">Cancel</button></div>
   <div id="hire-row" class="hidden"><span id="hire-hint"></span><button class="btn" id="hire-yes">Hire</button><button class="btn" id="hire-no">Not this one</button></div>
   <form id="chat-form" autocomplete="off">
     <input id="chat-input" maxlength="2000" placeholder="Say something…">

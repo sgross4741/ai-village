@@ -252,7 +252,9 @@
     sub.textContent = withWho === 'marshall' ? 'Your Deputy: give orders here' : withWho.area;
     chatTitle.appendChild(sub);
     if (withWho !== 'marshall' && withWho.isCandidate && !transcripts.has(withWho.key)) {
-      sayIn(withWho.key, '', `${withWho.name} is a candidate Marshall found to work for ${withWho.boss.name}. Ask them anything, then decide below. Nobody is hired without your yes.`, 'system');
+      sayIn(withWho.key, '', withWho.replaces
+        ? `${withWho.name} is a candidate Marshall found to take over ${withWho.seatArea}. Ask them anything, then decide below. Nobody is hired without your yes.`
+        : `${withWho.name} is a candidate Marshall found to work for ${withWho.boss.name}. Ask them anything, then decide below. Nobody is hired without your yes.`, 'system');
     }
     if (withWho !== 'marshall' && withWho.isWorker && !transcripts.has(withWho.key)) {
       sayIn(withWho.key, '', `${withWho.name} is ${withWho.boss.name}'s worker and takes work only from ${withWho.boss.name.split(' ')[0]}.`, 'system');
@@ -260,7 +262,9 @@
     chatLines.innerHTML = '';
     for (const l of transcripts.get(keyOf(withWho)) || []) addLine(chatLines, l.who, l.text, l.cls);
     chatEl.classList.remove('hidden');
+    letGoOpen = false;
     updateHireRow();
+    updateLetGo();
     showStatus();
     state.keys = {};
     chatInput.placeholder = withWho === 'marshall' ? 'Give Marshall an order…' : `Say something to ${withWho.name.split(' ')[0]}…`;
@@ -769,20 +773,42 @@
     return meetingSpots.deputySpot;
   }
   const townsfolkOnly = () => people.filter(q => !q.isWorker && !q.isCandidate);
-  function sendAway(q) { q.leaving = true; q.goal = { scene: town, tile: nav.entry }; q.path = []; }
+  function sendAway(q) { q.leaving = true; q.goal = { scene: town, tile: nav.entry }; q.path = []; q.seated = false; q.chat = null; }
+  // an empty seat: the townsperson's figure stays (house, desk, look) but nobody is in town
+  function makeVacant(q) { Object.assign(q, { vacant: true, leaving: false, gone: false, scene: null, path: [], goal: null, stepTo: null, moving: false, seated: false, chat: null, tasks: [] }); }
+  let rosterSeen = false, letGoAsk = null;
   async function pollRoster() {
     try {
       const j = await (await fetch(HELPER + '/roster')).json();
+      letGoAsk = j.letGoAsk || null;
+      for (const t of j.townspeople || []) {
+        const q = people.find(x => x.key === t.key && !x.isWorker && !x.isCandidate);
+        if (!q) continue;
+        if (t.vacant) { if (!q.vacant && !q.leaving) { if (rosterSeen) sendAway(q); else makeVacant(q); } continue; }
+        if (q.vacant && !people.some(x => x.isCandidate && x.replaces === t.key && deciding.has(x.key))) {   // filled while this page wasn't watching
+          const spot = q.yardSpots[0];
+          Object.assign(q, { vacant: false, scene: town, x: spot[0] * 16 + 8, y: spot[1] * 16 + 12, mode: 'free', wait: 1 });
+        }
+        if (!q.vacant) { q.name = t.name; q.area = t.area; }
+      }
+      for (const w of people.filter(x => x.isWorker)) {                 // workers keep their townsperson's current name
+        if (w.boss && !w.boss.vacant) w.area = `Worker for ${w.boss.name.split(' ')[0]} (${w.boss.area})`;
+        if (j.workers && !j.workers.some(x => x.key === w.key) && !w.leaving) { if (rosterSeen) sendAway(w); else w.gone = true; }   // let go
+      }
       for (const w of j.workers || []) {
         if (people.some(q => q.key === w.key) || !townsfolkOnly().some(t => t.key === w.owner)) continue;
         const a = makeWorker(w, people.length, town, townsfolkOnly(), null, people);
         a.sheet = workerSheet; people.push(a);
       }
       const c = j.candidate;
-      if (c && !people.some(q => q.key === c.key) && townsfolkOnly().some(t => t.key === c.owner)) {
+      if (c && !people.some(q => q.key === c.key) && (c.replaces || townsfolkOnly().some(t => t.key === c.owner))) {
         const a = makeCandidate(c, town, nav, hallRoom, candidateWaitTile(), townsfolkOnly());
-        a.sheet = workerSheet; people.push(a);
+        const seat = c.replaces && townsfolkOnly().find(t => t.key === c.replaces);
+        a.sheet = seat ? seat.sheet : workerSheet;                        // someone taking over a seat wears that seat's look
+        people.push(a);
       }
+      rosterSeen = true;
+      updateLetGo();
       for (const q of people) if (q.isCandidate && !q.leaving && !deciding.has(q.key) && (!c || c.key !== q.key)) sendAway(q);
     } catch { /* helper not running */ }
   }
@@ -794,7 +820,7 @@
     if (!c) return;
     const here = state.scene === hallRoom && c.scene === hallRoom;
     hireBtn.disabled = passBtn.disabled = !here || deciding.has(c.key);
-    hireHint.textContent = here ? `Hire ${c.name} to work for ${c.boss.name.split(' ')[0]}?` : `Interview ${c.name} at the town hall to decide.`;
+    hireHint.textContent = here ? (c.replaces ? `Hire ${c.name} to take over ${c.seatArea}?` : `Hire ${c.name} to work for ${c.boss.name.split(' ')[0]}?`) : `Interview ${c.name} at the town hall to decide.`;
   }
   async function decideCandidate(hire) {
     const c = chatWith;
@@ -804,7 +830,18 @@
       const r = await fetch(HELPER + '/hire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: c.key, decision: hire ? 'hire' : 'pass' }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Something went wrong.');
-      if (j.hired) {
+      if (j.hired && j.replaced) {
+        // the candidate takes over the empty seat: same house, desk and look
+        const seat = people.find(q => q.key === j.replaced.key && !q.isWorker && !q.isCandidate);
+        if (seat) {
+          Object.assign(seat, { vacant: false, gone: false, leaving: false, scene: c.scene, x: c.x, y: c.y, dir: c.dir, stepTo: null, path: [], goal: null,
+            name: j.replaced.name, area: j.replaced.area, mode: 'free', wait: 0.2 });
+          people.splice(people.indexOf(c), 1);
+          for (const w of people) if (w.isWorker && w.boss === seat) w.area = `Worker for ${seat.name.split(' ')[0]} (${seat.area})`;
+          closeChat();
+          sayIn(seat.key, '', `Hired! ${seat.name} takes over ${seat.area} and is heading home to start work.`, 'note');
+        }
+      } else if (j.hired) {
         // the candidate becomes a worker and walks to their townsperson's yard
         const keep = { scene: c.scene, x: c.x, y: c.y, dir: c.dir, stepTo: c.stepTo };
         Object.assign(c, makeWorker(j.worker, people.length, town, townsfolkOnly(), { scene: c.scene, x: c.x, y: c.y }, people), keep,
@@ -818,6 +855,47 @@
     deciding.delete(c.key); updateHireRow();
   }
   hireBtn.addEventListener('click', () => decideCandidate(true));
+
+  // ---------- letting someone go: Let go in their chat box (or confirm Marshall's "to be sure?") ----------
+  // Nobody leaves without your yes. Their notes are kept and they write a handover note first.
+  const letGoBtn = $('let-go'), letGoRow = $('letgo-row'), letGoHint = $('letgo-hint'), letGoReason = $('letgo-reason'), letGoYes = $('letgo-yes'), letGoNo = $('letgo-no');
+  let letGoOpen = false, lettingGo = false;
+  const canLetGo = (q) => q && q !== 'marshall' && !q.isCandidate && !q.leaving && !q.vacant && people.includes(q);
+  function updateLetGo() {
+    const fromMarshall = chatWith === 'marshall' && letGoAsk;
+    letGoBtn.classList.toggle('hidden', !canLetGo(chatWith) || letGoOpen);
+    letGoRow.classList.toggle('hidden', !(fromMarshall || (letGoOpen && canLetGo(chatWith))));
+    letGoReason.classList.toggle('hidden', !!fromMarshall);
+    letGoYes.disabled = letGoNo.disabled = lettingGo;
+    if (fromMarshall) letGoHint.textContent = `Let ${letGoAsk.name} go${letGoAsk.reason ? ` (${letGoAsk.reason})` : ''}? Nothing happens until you press Let go.`;
+    else if (letGoOpen && canLetGo(chatWith)) letGoHint.textContent = chatWith.isWorker
+      ? `Let ${chatWith.name} go? ${chatWith.name} writes a handover note for ${chatWith.boss.name.split(' ')[0]} and leaves town. Their notes are kept.`
+      : `Let ${chatWith.name} go? ${chatWith.name.split(' ')[0]} writes a handover note and leaves town; the house, workers and open work stay, and Marshall finds a replacement for you to interview. Their notes are kept.`;
+  }
+  async function confirmLetGo() {
+    const fromMarshall = chatWith === 'marshall' && letGoAsk;
+    const key = fromMarshall ? letGoAsk.key : canLetGo(chatWith) ? chatWith.key : null;
+    if (!key || lettingGo) return;
+    lettingGo = true; updateLetGo();
+    const chatKey = keyOf(chatWith);
+    try {
+      const r = await fetch(HELPER + '/let-go', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, reason: fromMarshall ? letGoAsk.reason : letGoReason.value.trim() }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Something went wrong.');
+      const q = people.find(x => x.key === key && !x.isCandidate);
+      if (q) sendAway(q);
+      sayIn(chatKey, '', `${j.name} is writing a handover note and heading out of town.`, 'note');
+      letGoOpen = false; letGoReason.value = ''; letGoAsk = null;
+    } catch (err) { sayIn(chatKey, '', String(err instanceof TypeError ? "The village helper isn't running." : err.message), 'problem'); }
+    lettingGo = false; updateLetGo();
+  }
+  letGoBtn.addEventListener('click', () => { letGoOpen = true; updateLetGo(); letGoReason.focus(); });
+  letGoYes.addEventListener('click', confirmLetGo);
+  letGoNo.addEventListener('click', async () => {
+    if (chatWith === 'marshall' && letGoAsk) { letGoAsk = null; try { await fetch(HELPER + '/let-go', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cancel: true }) }); } catch { /* helper not running */ } }
+    letGoOpen = false; letGoReason.value = ''; updateLetGo();
+  });
+  letGoReason.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') confirmLetGo(); if (e.key === 'Escape') { letGoOpen = false; updateLetGo(); } });
   passBtn.addEventListener('click', () => decideCandidate(false));
 
   // ---------- notices: everything Marshall needs you for ----------
@@ -1027,7 +1105,7 @@
     if (sheet.ready) draw(); else sheet.img.addEventListener('load', draw);
     return c;
   }
-  const attendees = () => [{ key: 'room', name: 'Everyone', area: 'The whole room' }, { key: 'marshall', name: 'Marshall', area: 'Deputy', sheet: marshallSheet }, ...people.filter(q => !q.isWorker && !q.isCandidate)];
+  const attendees = () => [{ key: 'room', name: 'Everyone', area: 'The whole room' }, { key: 'marshall', name: 'Marshall', area: 'Deputy', sheet: marshallSheet }, ...people.filter(q => !q.isWorker && !q.isCandidate && !q.vacant)];
   const whoByKey = (k) => attendees().find(a => (a.key || a) === k);
   function picFor(a) { if (a.key === 'room') { const d = el('span', 'pic all', '★'); return d; } return portrait(a.sheet); }
   function applyMeetSize() { meetEl.style.setProperty('--pic', meetSize + 'px'); try { localStorage.setItem('aiv-meet-size', String(meetSize)); } catch { /* */ } }
@@ -1224,9 +1302,10 @@
       talkedToday, recordChat, store: storeCtx,
     };
     people.forEach((person, i) => updateTownsperson(person, i, dt, lifeCtx, people));
-    for (let i = people.length - 1; i >= 0; i--) if (people[i].gone) {     // a candidate who walked out of town
+    for (let i = people.length - 1; i >= 0; i--) if (people[i].gone) {     // walked out of town (a candidate, or someone let go)
       if (chatWith === people[i]) closeChat();
-      people.splice(i, 1);
+      if (!people[i].isWorker && !people[i].isCandidate) makeVacant(people[i]);   // a townsperson's seat stays, empty
+      else people.splice(i, 1);
     }
     updateHireRow();
 

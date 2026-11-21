@@ -12,3 +12,6 @@ workshop/
 # The Village Library: your reference files stay on your computer (only its README is shared)
 library/*
 !library/README.md
+
+# people the Sheriff let go: their instructions, notes and handover (kept on your computer)
+agents/archive/

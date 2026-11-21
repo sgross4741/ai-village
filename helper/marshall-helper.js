@@ -76,27 +76,40 @@ const writeJSON = (file, value) => fs.writeFileSync(file, JSON.stringify(value, 
 const today = () => new Date().toLocaleDateString('en-CA');
 
 // ---------- the townspeople ----------
+// Letting someone go keeps the seat: the folder key (e.g. "clem") stays the seat's id, so questions,
+// waiting work and hand-offs carry over to whoever takes it. A successor's instructions live in
+// marshall-home/staff/<key>/INSTRUCTIONS.md (private, so the files saved in GitHub never change).
+const STAFF = path.join(HOME, 'staff');
+const staff = () => { const h = readJSON(HIRING_FILE, {}); return { vacant: h.vacant || {}, departed: h.departed || {}, formerNames: h.formerNames || {} }; };
+function instructionsFile(key) {
+  const own = path.join(STAFF, key, 'INSTRUCTIONS.md');
+  return fs.existsSync(own) ? own : path.join(AGENTS, key, 'INSTRUCTIONS.md');
+}
+const villageName = (full) => { const nick = full.match(/"([^"]+)"/); return nick ? `${nick[1]} ${full.split(/\s+/).pop()}` : full; };
 function townspeople() {
-  const list = [];
+  const list = [], { vacant } = staff();
   for (const key of fs.existsSync(AGENTS) ? fs.readdirSync(AGENTS).sort() : []) {
-    const file = path.join(AGENTS, key, 'INSTRUCTIONS.md');
-    if (!/^[a-z]{2,20}$/.test(key) || !fs.existsSync(file)) continue;
+    const file = instructionsFile(key);
+    if (!/^[a-z]{2,20}$/.test(key) || vacant[key] || !fs.existsSync(file)) continue;
     const head = fs.readFileSync(file, 'utf8').split('\n')[0];              // "# Name: Area"
     const m = head.match(/^#\s*(.+?):\s*(.+)$/);
     // 'Clementine "Clem" Pike' -> 'Clem Pike' (the name used in the village)
-    const full = m ? m[1].trim() : key, nick = full.match(/"([^"]+)"/);
-    list.push({ key, name: nick ? `${nick[1]} ${full.split(/\s+/).pop()}` : full, area: m ? m[2].trim() : '' });
+    const full = m ? m[1].trim() : key;
+    list.push({ key, name: villageName(full), full, area: m ? m[2].trim() : '' });
   }
   return list;
 }
+// every seat, filled or not (a vacant one keeps its workers while the Sheriff interviews a replacement)
+const allSeats = () => townspeople().concat(Object.entries(staff().vacant).map(([key, v]) => ({ key, name: `the new ${v.area} townsperson`, area: v.area, vacant: true })));
+const isVacant = (key) => !!staff().vacant[key];
 // the workers: agents/<townsperson>/workers/<key>/INSTRUCTIONS.md ("# Biscuit: Worker for Clem Pike (Prospecting)")
 function workers() {
-  const list = [];
-  for (const tp of townspeople()) {
+  const list = [], { departed } = staff();
+  for (const tp of allSeats()) {
     const dir = path.join(AGENTS, tp.key, 'workers');
     for (const key of fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []) {
       const file = path.join(dir, key, 'INSTRUCTIONS.md');
-      if (!/^[a-z]{2,20}$/.test(key) || !fs.existsSync(file)) continue;
+      if (!/^[a-z]{2,20}$/.test(key) || departed[key] || !fs.existsSync(file)) continue;
       const m = fs.readFileSync(file, 'utf8').split('\n')[0].match(/^#\s*(.+?):/);
       list.push({ key, name: m ? m[1].trim() : key, owner: tp.key, dir: path.join(dir, key) });
     }
@@ -112,7 +125,7 @@ function pickWorker(townsperson, text) {
   const named = ws.find(w => new RegExp('\\b' + w.name + '\\b', 'i').test(text || ''));
   return named || ws.find(w => !working.has(w.key)) || ws[0];
 }
-const shortName = (key) => { const p = townspeople().find(t => t.key === key) || workerInfo(key); return p ? p.name : key; };
+const shortName = (key) => { const p = allSeats().find(t => t.key === key) || workerInfo(key); return p ? p.name : key; };
 
 // ---------- running Claude Code (your subscription, no tools) ----------
 // Only your Claude subscription login: remove every way Claude Code could bill
@@ -400,7 +413,7 @@ function sayLine(text, max) {
 }
 
 // a section that may run over several lines, up to the next answer line (keeps line breaks)
-const FIELDS = 'SAY|NOTE|DONE|TASK|WORKER|INSTRUCTIONS|WORK|VERDICT|CHECK|FIXED|HELP|HIRE|DRAFT|LINK|NAME|PERSONALITY|QUIRK|STRENGTHS|WHY|QUESTION|BLOCKED|PROPOSE|ASK|PASS|START|ANSWER';
+const FIELDS = 'SAY|NOTE|HANDOVER|LETGO|DONE|TASK|WORKER|INSTRUCTIONS|WORK|VERDICT|CHECK|FIXED|HELP|HIRE|DRAFT|LINK|NAME|PERSONALITY|QUIRK|STRENGTHS|WHY|QUESTION|BLOCKED|PROPOSE|ASK|PASS|START|ANSWER';
 function block(text, key) {
   const re = new RegExp('^\\s*\\**\\s*' + key + '\\s*\\**\\s*:[ \\t]*([\\s\\S]*?)(?=^\\s*\\**\\s*(?:' + FIELDS + ')\\b[^\\n:]{0,20}\\**\\s*:|(?![\\s\\S]))', 'im');
   const m = text.match(re);
@@ -525,14 +538,14 @@ function ensureNotes() {
     if (!fs.existsSync(file)) fs.writeFileSync(file, fresh(t.name, `What I learn while working on **${t.area}** for the Sheriff.`, ["What I've learned", 'People and contacts', 'Open items', 'Conversations']));
   }
   for (const w of workers()) {
-    const file = path.join(w.dir, 'NOTES.md'), boss = townspeople().find(t => t.key === w.owner);
+    const file = path.join(w.dir, 'NOTES.md'), boss = allSeats().find(t => t.key === w.owner);
     if (!fs.existsSync(file)) fs.writeFileSync(file, fresh(w.name, `What I learn while helping ${boss.name} with **${boss.area}**.`, ["What I've learned", 'Conversations']));
   }
 }
 
 // a townsperson's notes (agents/<key>/NOTES.md) or a worker's (agents/<townsperson>/workers/<key>/NOTES.md)
 function notesFileFor(key) {
-  if (!/^[a-z]{2,20}$/.test(key)) return null;
+  if (!/^[a-z]{2,20}$/.test(key) || isVacant(key) || staff().departed[key]) return null;
   ensureNotes();
   const own = path.join(AGENTS, key, 'NOTES.md');
   if (fs.existsSync(own)) return own;
@@ -560,7 +573,7 @@ function addNote(agent, section, text) {
 // ---------- Marshall ----------
 function marshallPrompt() {
   const roster = townspeople().map(t => `- ${t.key}: ${t.name} (${t.area})`).join('\n');
-  return fs.readFileSync(MARSHALL_PERSONA, 'utf8') + `\n\nThe townspeople you can hand work to (use their key):\n${roster}\n` + `\n\n## Your notes` + statusText(null) + toolsNote('marshall') + townFacts() + approvedWorkText('marshall');
+  return fs.readFileSync(MARSHALL_PERSONA, 'utf8') + `\n\nThe townspeople you can hand work to (use their key):\n${roster}\n` + workerRoster() + staffChanges() + `\n\n## Your notes` + statusText(null) + toolsNote('marshall') + townFacts() + approvedWorkText('marshall');
 }
 const pending = [];             // tasks waiting for the Sheriff's "Send next batch"
 const working = new Map();      // agent key -> task they're working on right now
@@ -588,6 +601,7 @@ async function talkToMarshall(text) {
   for (const m of answer.matchAll(/^\s*\**\s*HIRE\s+([a-z]+)\s*\**\s*:\s*(.+)$/gim)) {
     if (townspeople().some(t => t.key === m[1].toLowerCase())) requestHelp(m[1].toLowerCase(), tidy(m[2], 200), 'Sheriff');
   }
+  for (const m of [...answer.matchAll(/^\s*\**\s*LETGO\s+([a-z]+)\s*\**\s*:?\s*(.*)$/gim)].slice(0, 1)) proposeLetGo(m[1].toLowerCase(), m[2] || '');
   pending.push(...tasks);
   const sent = sendBatch();
   if (pending.length) {
@@ -782,11 +796,12 @@ function waitOnSheriff(t, qs, reply) {
 function resumeWaiting() {
   const waiting = readJSON(WAITING_FILE, {}), qs = loadQuestions();
   for (const [ref, w] of Object.entries(waiting)) {
+    if (isVacant(w.t.agent) || leavingNow.has(w.t.agent)) continue;
     const mine = qs.filter(q => w.questions.includes(q.id));
     if (mine.some(q => q.status === 'open')) continue;
     delete waiting[ref]; writeJSON(WAITING_FILE, waiting);
-    const t = { ...w.t, answered: mine.map(q => ({ text: q.text, answer: q.status === 'answered' ? q.answer : '' })) };
-    addLog('Marshall', shortName(t.agent), `The Sheriff answered your questions on "${clip(t.task, 100)}". Back to it.`, 'task');
+    const t = { ...w.t, answered: w.forSuccessor ? w.t.answered : mine.map(q => ({ text: q.text, answer: q.status === 'answered' ? q.answer : '' })) };
+    addLog('Marshall', shortName(t.agent), w.forSuccessor ? `This was waiting for you, from before you took over: "${clip(t.task, 100)}". The handover note in your notes has the background.` : `The Sheriff answered your questions on "${clip(t.task, 100)}". Back to it.`, 'task');
     working.set(t.agent, t.task);
     if (t.todoId) updateAssignment(t, { status: 'working' });
     doTask(t).catch(e => {
@@ -1007,7 +1022,7 @@ setInterval(() => { workDayTick().catch(() => {}); }, Number(process.env.VILLAGE
 function roomPrompt() {
   const intro = (key) => {
     try {
-      const t = fs.readFileSync(path.join(AGENTS, key, 'INSTRUCTIONS.md'), 'utf8');
+      const t = fs.readFileSync(instructionsFile(key), 'utf8');
       const who = (t.match(/## Who you are\s*\n([\s\S]*?)\n## /) || [])[1] || '';
       return tidy(who.replace(/You are [^,]+,?\s*/, ''), 260);
     } catch { return ''; }
@@ -1109,7 +1124,7 @@ const townFacts = () => { try { const t = fs.readFileSync(FACTS_FILE, 'utf8').tr
 // withPrivate=false for runs that may open any web page: no library, no town facts in those
 function townspersonPrompt(agent, withPrivate = true) {
   const dir = path.join(AGENTS, agent);
-  const instructions = fs.readFileSync(path.join(dir, 'INSTRUCTIONS.md'), 'utf8');
+  const instructions = renamed(fs.readFileSync(instructionsFile(agent), 'utf8'));
   const notes = fs.existsSync(path.join(dir, 'NOTES.md')) ? fs.readFileSync(path.join(dir, 'NOTES.md'), 'utf8') : '';
   const crew = workersOf(agent);
   return `${instructions}
@@ -1130,7 +1145,7 @@ NOTE: one short thing worth remembering from this conversation for your notes, o
 (For a task, also the extra lines asked for, which can be longer.)
 
 ## Your notes
-${recentNotes(notes)}${statusText(agent)}${toolsNote(agent)}${withPrivate ? townFacts() : ''}${withPrivate ? approvedWorkText(agent) : ''}${withPrivate && (MATRIX[agent] || {}).library ? libraryText() : ''}${(MATRIX[agent] || {}).logs ? logsText() : ''}`;
+${recentNotes(notes)}${staffChanges()}${statusText(agent)}${toolsNote(agent)}${withPrivate ? townFacts() : ''}${withPrivate ? approvedWorkText(agent) : ''}${withPrivate && (MATRIX[agent] || {}).library ? libraryText() : ''}${(MATRIX[agent] || {}).logs ? logsText() : ''}`;
 }
 // a townsperson's own run (a task or a chat) gets their tools from the matrix; checking runs and workers get none
 const ownRun = (agent) => ({ prompt: townspersonPrompt(agent, loadsPrivate(agent)), opts: { allowTools: toolsFor(agent) } });
@@ -1201,6 +1216,7 @@ const HELP_ASK = `If you need more help (too much work, or your workers can't ke
 const YOURSELF = `WORK: the finished piece itself in full, if the task asks for something written (a letter, email, plan, list); leave this line out otherwise\nDONE: what you did, in up to 80 words, and anything the Sheriff still has to do (for example, send it).`;
 
 async function doTask(t) {
+  if (isVacant(t.agent)) return parkForSuccessor(t);                // that seat is empty: the work waits for whoever takes it
   const name = shortName(t.agent);
   let w = pickWorker(t.agent, t.task);
   const toWorker = wantsWorker(t.task, w);
@@ -1437,7 +1453,7 @@ const loadHiring = () => ({ candidate: null, history: [], asked: {}, ...readJSON
 const saveHiring = (h) => writeJSON(HIRING_FILE, h);
 function takenKeys() {
   const h = loadHiring();
-  return new Set(['marshall', 'sheriff', ...townspeople().map(t => t.key), ...workers().map(w => w.key), ...h.history.map(x => x.key), ...(h.candidate ? [h.candidate.key] : [])]);
+  return new Set(['marshall', 'sheriff', 'archive', ...allSeats().map(t => t.key), ...townspeople().map(t => firstOf(t.name).toLowerCase()), ...workers().map(w => w.key), ...Object.keys(h.departed || {}), ...h.history.map(x => x.key), ...(h.candidate ? [h.candidate.key] : [])]);
 }
 function askedForHelp(agent, answer) {
   const why = grab(answer, 'HELP');
@@ -1446,6 +1462,7 @@ function askedForHelp(agent, answer) {
 // someone needs help: Marshall looks for a candidate (one at a time; at most MAX_WORKERS each)
 function requestHelp(agent, reason, askedBy) {
   const h = loadHiring(), name = shortName(agent), bySheriff = askedBy === 'Sheriff';
+  if (!townspeople().some(t => t.key === agent)) return;          // an empty seat hires nobody until it's filled
   addLog(askedBy === name ? name : 'Sheriff', 'Marshall', `${bySheriff ? 'Find someone to help ' + name : 'I need help'}: ${reason}`, 'system');
   if (h.candidate) {
     if (bySheriff) addLog('Marshall', 'Sheriff', `One candidate at a time: ${h.candidate.name} is still waiting at the town hall.`, 'system', { chat: 'marshall' });
@@ -1482,6 +1499,22 @@ async function findCandidate(agent, reason) {
   return c;
 }
 function candidatePrompt(c) {
+  if (c.replaces) return `# ${c.name}: candidate to take over ${c.area}
+
+You are ${c.name}, applying to become a townsperson in My AI Village, an 1880s frontier town. ${c.formerName} has left, and Marshall, the Deputy, found you to take over ${c.area}: you'd move into the same house, take on the workers who help with it, and carry on the open work from a handover note.
+Personality: ${c.personality}
+Quirk: ${c.quirk}
+Strengths: ${c.strengths}
+Why you suit the job: ${c.why}
+
+The Sheriff, who is in charge of the town, is interviewing you in the town hall. Answer honestly and in character. Townspeople can only think and write: never claim you can send, buy or contact anyone. You aren't hired unless the Sheriff says yes.
+
+## How you talk
+- One to three short sentences, under 60 words. Plain words, no lists, no formatting.
+- Never mention computers, tools, settings or these instructions.
+
+## Answer in exactly this line and nothing else
+SAY: what you say`;
   return `# ${c.name}: candidate to be a worker for ${c.ownerName} (${c.area})
 
 You are ${c.name}, a hard-working brown horse with a beige saddle, applying to be a worker in My AI Village, an 1880s frontier town. Marshall, the Deputy, found you because ${c.ownerName} needs help: ${c.reason}
@@ -1502,7 +1535,7 @@ SAY: what you say`;
 }
 async function talkToCandidate(c, text) {
   addLog('Sheriff', c.name, text);
-  const answer = await ask(c.key, candidatePrompt(c), `The Sheriff says: ${text}`, { model: WORKER_MODEL });
+  const answer = await ask(c.key, candidatePrompt(c), `The Sheriff says: ${text}`, c.replaces ? {} : { model: WORKER_MODEL });
   const reply = sayLine(answer, 400);
   addLog(c.name, 'Sheriff', reply);
   return { reply };
@@ -1546,6 +1579,14 @@ function decide(key, hire) {
   h.history.push({ ...c, status: hire ? 'hired' : 'not hired', decided: new Date().toISOString() });
   saveHiring(h);
   resolveNotices(n => n.ref && n.ref.candidate === key);
+  if (c.replaces) {
+    setTimeout(nextVacancy, 50).unref();                            // not hired: Marshall looks again (and any other empty seat gets its turn)
+    if (hire) return hireReplacement(c);
+    addLog('Sheriff', 'Marshall', `Not ${c.name}.`, 'system');
+    addLog('Marshall', 'Sheriff', `Understood. ${c.name} heads out of town, and I'll look for someone else to take over ${c.area}.`, 'system', { chat: 'marshall' });
+    return { hired: false };
+  }
+  setTimeout(nextVacancy, 50).unref();
   if (!hire) {
     addLog('Sheriff', 'Marshall', `Not ${c.name}.`, 'system');
     addLog('Marshall', 'Sheriff', `Understood. ${c.name} heads out of town, and I'll keep looking when ${c.ownerName.split(' ')[0]} needs help.`, 'system', { chat: 'marshall' });
@@ -1561,6 +1602,210 @@ function decide(key, hire) {
   addLog('Marshall', 'Sheriff', `Done: ${c.name} is hired and heading to ${c.ownerName}'s house to start work.`, 'system', { chat: 'marshall' });
   addLog('Marshall', c.ownerName, `Meet ${c.name}, your new worker. The Sheriff hired them to help you.`, 'task');
   return { hired: true, worker: { key: c.key, name: c.name, owner: c.owner } };
+}
+
+// ---------- letting someone go (only ever with the Sheriff's yes) ----------
+// Nothing is deleted: their instructions, notes and a handover note go to agents/archive/<key>-<date>/.
+// A worker's handover goes to their townsperson. A townsperson's seat stays (same key, house, area and
+// workers): Marshall finds a replacement for the Sheriff to interview, and the open work waits for them.
+const ARCHIVE = path.join(AGENTS, 'archive');
+const leavingNow = new Set();      // being let go right now (their handover note is being written)
+const reEsc = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const firstOf = (name) => String(name).split(' ')[0];
+function staffChanges() {
+  const h = readJSON(HIRING_FILE, {}), lines = [];
+  for (const v of Object.values(h.vacant || {})) lines.push(`- ${v.formerName} (${v.area}) has left the village. The ${v.area} seat is empty until the Sheriff hires a replacement: work for that area waits for them.`);
+  for (const x of (h.changes || []).slice(-6)) lines.push(`- ${x.date}: ${x.text}`);
+  return lines.length ? `\n\n## Changes in town\n${lines.join('\n')}` : '';
+}
+function workerRoster() {
+  const ws = workers();
+  return ws.length ? `\nThe workers (horses who help a townsperson; only townspeople take your TASKs):\n${ws.map(w => `- ${w.key}: ${w.name}, works for ${shortName(w.owner)}`).join('\n')}\n` : '';
+}
+// old names in instructions written before someone left now mean whoever took over
+function renamed(text) {
+  const { formerNames } = staff();
+  for (const [key, list] of Object.entries(formerNames)) {
+    const now = townspeople().find(t => t.key === key);
+    if (!now) continue;
+    for (const f of list) {
+      text = text.split(f.full).join(now.name).split(f.name).join(now.name);
+      text = text.replace(new RegExp('\\b' + reEsc(f.first) + '\\b', 'g'), firstOf(now.name));
+    }
+  }
+  return text;
+}
+function appendSection(file, heading, text) {
+  if (!file || !fs.existsSync(file)) return;
+  fs.appendFileSync(file, `\n## ${heading}\n${String(text).trim()}\n`);
+}
+function letGoCheck(key) {
+  const tp = townspeople().find(t => t.key === key), w = tp ? null : workerInfo(key);
+  if (!tp && !w) throw new Error('There is nobody by that name in town.');
+  if (leavingNow.has(key)) throw new Error(`${shortName(key)} is already on the way out.`);
+  const busy = [key, ...(tp ? workersOf(key).map(x => x.key) : [])].find(k => working.has(k));
+  if (busy) throw new Error(`${shortName(busy)} is in the middle of a job ("${clip(working.get(busy), 80)}"). Let it finish first, then try again.`);
+  return { tp, w };
+}
+// Marshall heard "let X go": the Sheriff still confirms with the Let go button
+function proposeLetGo(key, reason) {
+  try { letGoCheck(key); } catch (e) { addLog('Marshall', 'Sheriff', `I can't let ${shortName(key)} go right now: ${e.message}`, 'system', { chat: 'marshall' }); return; }
+  const h = loadHiring(); h.letGoAsk = { key, name: shortName(key), reason }; saveHiring(h);
+  addLog('Marshall', 'Sheriff', `To be sure: let ${shortName(key)} go${reason ? ` (${reason})` : ''}? Press Let go below to confirm, or Cancel.`, 'system', { chat: 'marshall' });
+}
+function parkForSuccessor(t) {
+  const waiting = readJSON(WAITING_FILE, {});
+  waiting[taskRef(t)] = { t: { ...t, answered: undefined }, questions: [], since: new Date().toISOString(), forSuccessor: true };
+  writeJSON(WAITING_FILE, waiting);
+  if (working.get(t.agent) === t.task) working.delete(t.agent);
+  const area = (staff().vacant[t.agent] || {}).area || '';
+  if (t.todoId) updateAssignment(t, { status: `waiting for the new ${area} townsperson` });
+}
+function letGo(key, reason) {
+  const { tp, w } = letGoCheck(key);
+  reason = isNone(reason || 'none') ? '' : tidy(reason, 300);
+  const name = shortName(key), owner = w ? w.owner : null;
+  // the handover is written from everything they know now, before the seat is emptied
+  const prompt = tp ? townspersonPrompt(key, true) : workerPrompt(key);
+  const instructions = fs.readFileSync(tp ? instructionsFile(key) : path.join(w.dir, 'INSTRUCTIONS.md'), 'utf8');
+  const h = loadHiring();
+  if (h.letGoAsk && h.letGoAsk.key === key) h.letGoAsk = null;
+  if (tp) h.vacant = { ...(h.vacant || {}), [key]: { area: tp.area, formerName: tp.name, formerFull: tp.full, since: new Date().toISOString(), reason, instructions } };
+  else h.departed = { ...(h.departed || {}), [key]: { name, owner, since: new Date().toISOString(), reason } };
+  h.changes = [...(h.changes || []), { date: today(), text: tp ? `The Sheriff let ${name} (${tp.area}) go.` : `The Sheriff let ${name} (a worker for ${shortName(owner)}) go.` }];
+  saveHiring(h);
+  leavingNow.add(key);
+  const sessions = readJSON(SESSIONS_FILE, {}); delete sessions[key]; writeJSON(SESSIONS_FILE, sessions);
+  if (tp) {
+    for (let i = pending.length - 1; i >= 0; i--) if (pending[i].agent === key) parkForSuccessor(pending.splice(i, 1)[0]);   // queued work waits for the successor
+    const qs = loadQuestions(); let changed = false;
+    for (const q of qs) if (q.from === key && q.status === 'open') { q.fromName = `${tp.area} (for whoever takes over from ${firstOf(name)})`; changed = true; }
+    if (changed) writeJSON(QUESTIONS_FILE, qs);
+  }
+  addLog('Sheriff', name, `You're let go${reason ? `: ${reason}` : '.'}`, 'system', { chat: key });
+  addLog('Marshall', 'Sheriff', tp
+    ? `Understood. ${name} is packing up and leaving town. I'm having ${firstOf(name)} write a handover note first, then I'll find someone to take over ${tp.area} for you to interview. ${firstOf(name)}'s workers stay, and the open work waits for the new person.`
+    : `Understood. ${name} is heading out of town. I'm having ${name} write a handover note for ${shortName(owner)} first.`, 'system', { chat: 'marshall' });
+  finishLetGo({ key, name, tp, w, owner, prompt, instructions, reason }).catch(e => {
+    leavingNow.delete(key);
+    addNotice('problem', `Something went wrong while ${name} left: ${clip(e.message, 160)}`, { log: true });
+  });
+  return { key, name, townsperson: !!tp };
+}
+async function finishLetGo({ key, name, tp, w, owner, prompt, instructions, reason }) {
+  const carryOn = tp ? `the next ${tp.area} townsperson` : shortName(owner);
+  let handover = '', bye = '';
+  try {
+    const answer = await ask(key, prompt, `The Sheriff has let you go${reason ? `: ${reason}` : ''}. You're leaving the village. Before you go, write a handover note for ${carryOn}, who carries on your work. Be specific and complete, and write it plainly and professionally. Cover, under these headings:\n` +
+      `What they need to know (facts, people and contacts, how the Sheriff likes things)\nWork in progress (what's open and where it stands)\nWaiting on the Sheriff (questions still open)\nPromises to colleagues (what you said you'd give whom)\n\n` +
+      `Answer in exactly this shape:\nSAY: one short, gracious goodbye\nHANDOVER:\n(the note, short dated bullet points under those four headings)`, { fresh: true, ...(tp ? {} : { model: WORKER_MODEL }) });
+    handover = clip(block(answer, 'HANDOVER'), 6000);
+    bye = sayLine(answer, 240);
+  } catch (e) { addLog('Village helper', 'Marshall', `${name}'s handover note couldn't be written (${e.message}), so their own notes are passed on instead.`, 'problem'); }
+  const notesFile = tp ? path.join(AGENTS, key, 'NOTES.md') : path.join(w.dir, 'NOTES.md');
+  const notes = fs.existsSync(notesFile) ? fs.readFileSync(notesFile, 'utf8') : '';
+  if (!handover) handover = `(No handover note was written, so here are ${name}'s own notes.)\n${clip(notes, 6000)}`;
+  // the archive: nothing is deleted
+  let dir = path.join(ARCHIVE, `${key}-${today()}`);
+  for (let n = 2; fs.existsSync(dir); n++) dir = path.join(ARCHIVE, `${key}-${today()}-${n}`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'INSTRUCTIONS.md'), instructions);
+  if (notes) fs.writeFileSync(path.join(dir, 'NOTES.md'), notes);
+  fs.writeFileSync(path.join(dir, 'HANDOVER.md'), `# ${name}'s handover (${today()})\n\nFor ${carryOn}.${reason ? `\nWhy the Sheriff let ${firstOf(name)} go: ${reason}` : ''}\n\n${handover}\n`);
+  if (notes) fs.rmSync(notesFile);
+  const hired = loadHiring().history.some(x => x.key === key && x.status === 'hired');
+  if (w && hired) fs.rmSync(w.dir, { recursive: true, force: true });      // a worker the village hired: their folder was only ever on this computer
+  const where = path.relative(path.join(AGENTS, '..'), dir);
+  if (bye) addLog(name, 'Sheriff', bye, 'system', { chat: key });
+  if (tp) {
+    const h = loadHiring();
+    if (h.vacant && h.vacant[key]) { h.vacant[key].handover = handover; h.vacant[key].archive = where; saveHiring(h); }
+    leavingNow.delete(key);
+    addLog('Marshall', 'Sheriff', `${name} has left town. The handover note is written for whoever takes over ${tp.area}, and everything ${firstOf(name)} had is kept in ${where}.`, 'system', { chat: 'marshall' });
+    findReplacementSoon(key);
+  } else {
+    appendSection(notesFileFor(owner), `Handover from ${name} (${today()})`, handover);
+    addNote(owner, "What I've learned", `The Sheriff let my worker ${name} go${reason ? ` (${reason})` : ''}. ${name}'s handover note is at the end of these notes; everything else is kept in ${where}.`);
+    leavingNow.delete(key);
+    addLog('Marshall', shortName(owner), `The Sheriff let ${name} go. ${name}'s handover note is in your notes.`, 'task');
+    addLog('Marshall', 'Sheriff', `${name} has left town. The handover note is in ${shortName(owner)}'s notes, and everything ${name} had is kept in ${where}.`, 'system', { chat: 'marshall' });
+  }
+}
+// one candidate at a time: an empty seat waits its turn behind a worker candidate
+function findReplacementSoon(key) {
+  const h = loadHiring(), v = (h.vacant || {})[key];
+  if (!v || leavingNow.has(key) || v.searching) return;
+  if (h.candidate) { addLog('Marshall', 'Sheriff', `I'll look for someone to take over ${v.area} once ${h.candidate.name}'s interview is done.`, 'system', { chat: 'marshall' }); return; }
+  v.searching = true; saveHiring(h);
+  findReplacement(key).catch(e => {
+    addLog('Marshall', 'Sheriff', `I couldn't find anyone to take over ${v.area}: ${e.message}`, 'problem', { chat: 'marshall' });
+    addNotice('problem', `Marshall couldn't find a replacement for ${v.area}: ${clip(e.message, 160)}. Ask Marshall to try again.`, { chat: 'marshall' });
+  }).finally(() => { const h2 = loadHiring(); if (h2.vacant && h2.vacant[key]) { delete h2.vacant[key].searching; saveHiring(h2); } });
+}
+const nextVacancy = () => { const k = Object.keys(staff().vacant).find(x => !leavingNow.has(x)); if (k) findReplacementSoon(k); };
+const SUCCESSOR_NAMES = ['Hank Mercer', 'Lottie Graves', 'Amos Whitlock', 'Della Crane', 'Jeb Calloway', 'Opal Hendry', 'Cyrus Abbott', 'Mae Lockhart', 'Virgil Dunn', 'Etta Shaw'];
+async function findReplacement(key) {
+  const v = staff().vacant[key], taken = takenKeys();
+  const names = [...townspeople().map(t => t.name), ...workers().map(x => x.name), ...Object.values(staff().vacant).map(x => x.formerName)];
+  const answer = await ask('marshall', marshallPrompt(),
+    `${v.formerName} has left the village and the ${v.area} seat is empty${v.reason ? ` (the Sheriff let ${firstOf(v.formerName)} go: ${v.reason})` : ''}. Find ONE candidate to interview for it: a person who will move into the same house, take over ${v.area}, and carry on the open work. In the village they'll look just like ${v.formerFull} did (same build, clothes and style), so pick someone who fits that look. ` +
+    `Give them a frontier first and last name nobody in town has (taken: ${names.join(', ')}; and the first name must not be one of: ${[...taken].join(', ')}). Answer in exactly these lines:\n` +
+    `SAY: one sentence telling the Sheriff who you found and that they're waiting at the town hall\nNAME: their first and last name\nPERSONALITY: one sentence\nQUIRK: one short sentence\nSTRENGTHS: one sentence on what they're good at in ${v.area}\nWHY: one sentence on why they suit the seat`);
+  let name = tidy(grab(answer, 'NAME'), 40).replace(/[^A-Za-z' -]/g, '').trim();
+  const ok = (n) => /^[A-Z][a-z]{1,15} [A-Z][A-Za-z'-]{1,20}$/.test(n) && !taken.has(firstOf(n).toLowerCase()) && !names.includes(n);
+  if (!ok(name)) name = SUCCESSOR_NAMES.find(ok) || `Newcomer ${v.area.split(' ')[0]}`;
+  const field = (k, d) => tidy(grab(answer, k) || d, 240);
+  const c = { key: firstOf(name).toLowerCase().replace(/[^a-z]/g, ''), name, replaces: key, owner: null, area: v.area, formerName: v.formerName,
+    reason: `to take over ${v.area} from ${v.formerName}`,
+    personality: field('PERSONALITY', 'Steady, sharp and keen to pick up where the last person left off.'), quirk: field('QUIRK', 'Keeps a pencil behind one ear.'),
+    strengths: field('STRENGTHS', `Knows ${v.area} well.`), why: field('WHY', `Can pick up ${v.area} quickly.`), status: 'waiting', found: new Date().toISOString() };
+  const h = loadHiring(); h.candidate = c; saveHiring(h);
+  const said = sayLine(answer, 260);
+  addLog('Marshall', 'Sheriff', `${said && new RegExp('\\b' + reEsc(firstOf(name)) + '\\b').test(said) ? said : `I found ${name} to take over ${v.area}: ${c.strengths}`} ${firstOf(name)} is waiting at the town hall for your interview.`, 'relay', { chat: 'marshall' });
+  addNotice('candidate', `Marshall found ${name} to take over ${v.area} (after ${v.formerName} left). They're waiting at the town hall for your interview.`, { candidate: c.key });
+  return c;
+}
+function successorInstructions(c, v) {
+  const house = (v.instructions.match(/You live in (House \d+)/) || [])[1] || 'the same house';
+  const at = v.instructions.indexOf('## Your job');
+  let rest = at >= 0 ? v.instructions.slice(at) : `## Your job\nYou own one area of the Sheriff's life: **${v.area}**.\n`;
+  rest = rest.split(v.formerFull).join(c.name).split(v.formerName).join(c.name).replace(new RegExp('\\b' + reEsc(firstOf(v.formerName)) + '\\b', 'g'), firstOf(c.name));
+  return `# ${c.name}: ${v.area}
+
+## Who you are
+You are ${c.name} ("${firstOf(c.name)}" for short), a townsperson in My AI Village, an 1880s frontier town. You live in ${house}. ${c.personality} A little quirk: ${c.quirk}
+Strengths: ${c.strengths}
+You're new here: the Sheriff hired you after an interview at the town hall to take over ${v.area}. Your notes start with a handover from the person who had this job before you: read it, and carry on their open work and promises.
+
+${rest}`;
+}
+function hireReplacement(c) {
+  const key = c.replaces, v = staff().vacant[key];
+  if (!v) throw new Error(`The ${c.area} seat isn't empty any more.`);
+  fs.mkdirSync(path.join(STAFF, key), { recursive: true });
+  fs.writeFileSync(path.join(STAFF, key, 'INSTRUCTIONS.md'), successorInstructions(c, v));
+  const h = loadHiring();
+  delete h.vacant[key];
+  h.formerNames = { ...(h.formerNames || {}), [key]: [...((h.formerNames || {})[key] || []), { full: v.formerFull, name: v.formerName, first: firstOf(v.formerName) }] };
+  h.changes = [...(h.changes || []), { date: today(), text: `${c.name} took over ${v.area} from ${v.formerName}. Anything meant for ${firstOf(v.formerName)} now goes to ${firstOf(c.name)}.` }];
+  saveHiring(h);
+  const sessions = readJSON(SESSIONS_FILE, {}); delete sessions[key]; delete sessions[c.key]; writeJSON(SESSIONS_FILE, sessions);
+  ensureNotes();                                                     // a fresh notes file, then the handover
+  addNote(key, "What I've learned", `The Sheriff hired me after an interview at the town hall to take over ${v.area} from ${v.formerName}. The handover note is at the end of these notes${v.archive ? `; everything ${firstOf(v.formerName)} had is kept in ${v.archive}` : ''}.`);
+  appendSection(notesFileFor(key), `Handover from ${v.formerName}`, v.handover || '(No handover note.)');
+  for (const w of workersOf(key)) addNote(w.key, "What I've learned", `${c.name} is my new townsperson: they took over ${v.area} from ${v.formerName}.`);
+  const qs = loadQuestions(); let qChanged = false;
+  for (const q of qs) if (q.from === key && q.fromName !== c.name) { q.fromName = c.name; qChanged = true; }
+  if (qChanged) writeJSON(QUESTIONS_FILE, qs);
+  const todos = loadTodos(); let tChanged = false;
+  for (const t of todos) for (const a of t.assignments || []) if (a.agent === key && a.status !== 'done') { a.name = c.name; tChanged = true; }
+  if (tChanged) saveTodos(todos);
+  addLog('Sheriff', 'Marshall', `Hire ${c.name}.`, 'system');
+  addLog('Marshall', 'Sheriff', `Done: ${c.name} takes over ${v.area} and is moving into ${firstOf(v.formerName)}'s old house. ${firstOf(c.name)} has the handover note and picks up the open work.`, 'system', { chat: 'marshall' });
+  addLog('Village helper', c.name, `— ${c.name} took over ${v.area} from ${v.formerName} —`, 'system', { chat: key });
+  addLog('Marshall', 'Everyone', `Meet ${c.name}, who takes over ${v.area} from ${v.formerName}. Anything you had for ${firstOf(v.formerName)} now goes to ${firstOf(c.name)}.`, 'task');
+  setTimeout(resumeWaiting, 50).unref();                              // parked work goes to the new person
+  return { hired: true, replaced: { key, name: c.name, area: v.area } };
 }
 
 // ---------- reviewing what the Workshop made: Approve, or Request changes with feedback ----------
@@ -1646,7 +1891,7 @@ async function publishSite(id) {
 // ---------- workers ----------
 function workerPrompt(key) {
   const w = workerInfo(key), boss = shortName(w.owner).split(' ')[0];
-  const instructions = fs.readFileSync(path.join(w.dir, 'INSTRUCTIONS.md'), 'utf8');
+  const instructions = renamed(fs.readFileSync(path.join(w.dir, 'INSTRUCTIONS.md'), 'utf8'));
   const notes = fs.existsSync(path.join(w.dir, 'NOTES.md')) ? fs.readFileSync(path.join(w.dir, 'NOTES.md'), 'utf8') : '';
   return `${instructions}
 
@@ -1666,7 +1911,7 @@ WORK: the finished work itself (as many lines as it needs)
 NOTE: one short thing worth remembering for next time, or none
 
 ## Your notes
-${recentNotes(notes)}${townFacts()}${approvedWorkText(w.owner)}`;
+${recentNotes(notes)}${staffChanges()}${townFacts()}${approvedWorkText(w.owner)}`;
 }
 
 // ---------- tiny web server, this computer only ----------
@@ -1880,7 +2125,21 @@ const server = http.createServer(async (req, res) => {
   }
   // who lives in town (workers come and go as the Sheriff hires them), and who's waiting at the town hall
   if (req.method === 'GET' && url.pathname === '/roster') {
-    return send(200, { workers: workers().map(w => ({ key: w.key, name: w.name, owner: w.owner })), candidate: loadHiring().candidate });
+    const h = loadHiring();
+    return send(200, { workers: workers().map(w => ({ key: w.key, name: w.name, owner: w.owner })), candidate: h.candidate,
+      townspeople: allSeats().map(t => ({ key: t.key, name: t.name, area: t.area, vacant: !!t.vacant })), leaving: [...leavingNow], letGoAsk: h.letGoAsk || null });
+  }
+  // letting someone go: POST { key, reason } (the Sheriff's button), or { cancel: true } for Marshall's "to be sure?"
+  if (req.method === 'POST' && url.pathname === '/let-go') {
+    const j = await readBody(req, 2000);
+    if (j.cancel) {
+      const h = loadHiring();
+      if (h.letGoAsk) { addLog('Sheriff', 'Marshall', `Don't let ${h.letGoAsk.name} go.`, 'system'); addLog('Marshall', 'Sheriff', `Understood. ${h.letGoAsk.name} stays.`, 'system', { chat: 'marshall' }); }
+      h.letGoAsk = null; saveHiring(h);
+      return send(200, { cancelled: true });
+    }
+    try { return send(200, letGo(String(j.key || ''), String(j.reason || ''))); }
+    catch (e) { return send(400, { error: e.message }); }
   }
   if (req.method === 'POST' && url.pathname === '/hire') {
     const j = await readBody(req, 1000);
